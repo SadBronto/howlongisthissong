@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "next lint",
     "seed": "tsx scripts/seed-sample.ts",
-    "import-mb": "tsx scripts/import-musicbrainz.ts"
+    "import-mb": "tsx scripts/import-musicbrainz.ts",
+    "import-d1": "tsx scripts/import-d1.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.4",

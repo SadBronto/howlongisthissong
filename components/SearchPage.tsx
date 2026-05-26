@@ -4,35 +4,33 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import SearchBar from './SearchBar';
 import SearchResults from './SearchResults';
+import { parseQuery } from '@/lib/queryParser';
 import type { SearchResult } from '@/lib/types';
 
 const EXAMPLES = [
-  { label: '3:16', hint: 'exact duration' },
-  { label: 'love 4:20', hint: 'keyword + time' },
-  { label: 'between 3:00 and 4:00', hint: 'range' },
-  { label: 'bohemian rhapsody', hint: 'by title' },
-  { label: 'pink floyd', hint: 'by artist' },
-  { label: 'free bird', hint: 'classic' },
+  { label: '3:16',                    hint: 'exact duration' },
+  { label: 'love 4:20',               hint: 'keyword + time' },
+  { label: 'between 3:00 and 4:00',   hint: 'range' },
+  { label: 'bohemian rhapsody',        hint: 'by title — all versions' },
+  { label: 'pink floyd',              hint: 'by artist' },
+  { label: 'free bird',               hint: 'classic' },
 ];
 
 export default function SearchPage() {
-  const router = useRouter();
+  const router       = useRouter();
   const searchParams = useSearchParams();
 
-  const [query, setQuery] = useState(searchParams.get('q') ?? '');
+  const [query,  setQuery]  = useState(searchParams.get('q') ?? '');
+  const [loose,  setLoose]  = useState(false);
   const [results, setResults] = useState<SearchResult | null>(null);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error,   setError]   = useState<string | null>(null);
 
   const debounceRef = useRef<ReturnType<typeof setTimeout>>();
-  const abortRef = useRef<AbortController | null>(null);
+  const abortRef    = useRef<AbortController | null>(null);
 
-  const doSearch = useCallback(async (q: string) => {
-    if (!q.trim()) {
-      setResults(null);
-      setError(null);
-      return;
-    }
+  const doSearch = useCallback(async (q: string, looseMode: boolean) => {
+    if (!q.trim()) { setResults(null); setError(null); return; }
 
     abortRef.current?.abort();
     const controller = new AbortController();
@@ -42,15 +40,20 @@ export default function SearchPage() {
     setError(null);
 
     try {
-      const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`, {
-        signal: controller.signal,
-      });
+      const base = process.env.NEXT_PUBLIC_WORKER_URL
+        ? `${process.env.NEXT_PUBLIC_WORKER_URL}/search`
+        : '/api/search';
+
+      const params = new URLSearchParams({ q });
+      if (looseMode) params.set('loose', '1');
+
+      const res = await fetch(`${base}?${params}`, { signal: controller.signal });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data: SearchResult = await res.json();
       if (!controller.signal.aborted) setResults(data);
     } catch (err) {
       if (err instanceof Error && err.name !== 'AbortError') {
-        setError('Search failed. Check your connection or Supabase config.');
+        setError('Search failed. Check your connection and try again.');
       }
     } finally {
       if (!controller.signal.aborted) setLoading(false);
@@ -61,42 +64,41 @@ export default function SearchPage() {
   useEffect(() => {
     clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
-      doSearch(query);
+      doSearch(query, loose);
       const url = query.trim() ? `/?q=${encodeURIComponent(query)}` : '/';
       router.replace(url, { scroll: false });
     }, 300);
     return () => clearTimeout(debounceRef.current);
-  }, [query, doSearch, router]);
+  }, [query, loose, doSearch, router]);
 
-  // Run initial search from URL on mount
+  // Initial search from URL on mount
   useEffect(() => {
     const q = searchParams.get('q');
-    if (q) doSearch(q);
+    if (q) doSearch(q, false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const hasQuery = !!query.trim();
+  // Re-run search immediately when loose toggles
+  const handleLooseToggle = (val: boolean) => {
+    setLoose(val);
+    doSearch(query, val);
+  };
+
+  const hasQuery    = !!query.trim();
+  const parsed      = parseQuery(query);
+  const isExactTime = parsed.exactDuration != null && !parsed.keywords;
 
   return (
     <div className="min-h-screen bg-white flex flex-col">
       {/* ── Header ── */}
-      <header
-        className={`flex flex-col items-center transition-all duration-200 ${
-          hasQuery ? 'pt-5 pb-3' : 'pt-20 sm:pt-28 pb-8'
-        }`}
-      >
-        <a
-          href="/"
-          onClick={(e) => { e.preventDefault(); setQuery(''); }}
-          className="no-underline"
-        >
-          <h1
-            className={`font-bold text-gray-900 tracking-tight transition-all duration-200 select-none ${
-              hasQuery ? 'text-xl mb-3' : 'text-3xl sm:text-5xl mb-4'
-            }`}
-          >
-            <span className="text-blue-600">HowLong</span>
-            IsThisSong
+      <header className={`flex flex-col items-center transition-all duration-200 ${
+        hasQuery ? 'pt-5 pb-3' : 'pt-20 sm:pt-28 pb-8'
+      }`}>
+        <a href="/" onClick={(e) => { e.preventDefault(); setQuery(''); setLoose(false); }} className="no-underline">
+          <h1 className={`font-bold text-gray-900 tracking-tight transition-all duration-200 select-none ${
+            hasQuery ? 'text-xl mb-3' : 'text-3xl sm:text-5xl mb-4'
+          }`}>
+            <span className="text-blue-600">HowLong</span>IsThisSong
             <span className="text-gray-300">.com</span>
           </h1>
         </a>
@@ -133,7 +135,14 @@ export default function SearchPage() {
           <p className="text-red-500 text-sm text-center mt-8 bg-red-50 py-3 px-4 rounded-lg">{error}</p>
         )}
         {hasQuery && !error && (
-          <SearchResults results={results} loading={loading} query={query} />
+          <SearchResults
+            results={results}
+            loading={loading}
+            query={query}
+            loose={loose}
+            isExactTime={isExactTime}
+            onLooseChange={handleLooseToggle}
+          />
         )}
         {!hasQuery && (
           <div className="mt-16 text-center text-sm text-gray-300 space-y-1">
@@ -146,12 +155,8 @@ export default function SearchPage() {
       {/* ── Footer ── */}
       <footer className="text-center text-xs text-gray-300 py-4 border-t border-gray-100">
         Data from{' '}
-        <a
-          href="https://musicbrainz.org"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="underline hover:text-gray-500 transition-colors"
-        >
+        <a href="https://musicbrainz.org" target="_blank" rel="noopener noreferrer"
+          className="underline hover:text-gray-500 transition-colors">
           MusicBrainz
         </a>{' '}
         and other public sources.

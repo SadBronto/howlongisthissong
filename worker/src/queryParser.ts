@@ -1,13 +1,14 @@
+// Shared with lib/queryParser.ts — keep in sync
+
 export interface ParsedQuery {
   keywords?: string;
-  exactDuration?: number;  // ms — the floor of the typed time (e.g. "3:15" → 195000)
-  minDuration?: number;    // ms — explicit range min
-  maxDuration?: number;    // ms — explicit range max
+  exactDuration?: number;
+  minDuration?: number;
+  maxDuration?: number;
   raw: string;
   isEmpty: boolean;
 }
 
-// "3:15" typed → 195000ms
 function parseDuration(str: string): number {
   const parts = str.split(':').map(Number);
   if (parts.length === 2) {
@@ -24,8 +25,6 @@ export function formatDuration(ms: number): string {
   return `${minutes}:${seconds.toString().padStart(2, '0')}`;
 }
 
-// Given an exactDuration, return the ms range that displays as that time.
-// "3:15" = 195000ms–195999ms — everything that renders as "3:15".
 export function exactDurationRange(ms: number, looseSecs = 0): [number, number] {
   return [ms - looseSecs * 1000, ms + 999 + looseSecs * 1000];
 }
@@ -35,7 +34,6 @@ export function parseQuery(input: string): ParsedQuery {
   const result: ParsedQuery = { raw: input, isEmpty: !q };
   if (!q) return result;
 
-  // "between X and Y"
   const betweenMatch = q.match(/between\s+(\d{1,2}:\d{2})\s+and\s+(\d{1,2}:\d{2})/i);
   if (betweenMatch) {
     result.minDuration = parseDuration(betweenMatch[1]);
@@ -43,7 +41,6 @@ export function parseQuery(input: string): ParsedQuery {
     q = q.replace(betweenMatch[0], '').trim();
   }
 
-  // "X to Y" or "X-Y" range (if no between match)
   if (!result.minDuration) {
     const rangeMatch = q.match(/(\d{1,2}:\d{2})\s*(?:to|-)\s*(\d{1,2}:\d{2})/i);
     if (rangeMatch) {
@@ -53,7 +50,6 @@ export function parseQuery(input: string): ParsedQuery {
     }
   }
 
-  // Single exact duration "3:15"
   if (!result.minDuration) {
     const exactMatch = q.match(/\b(\d{1,2}:\d{2})\b/);
     if (exactMatch) {
@@ -66,4 +62,14 @@ export function parseQuery(input: string): ParsedQuery {
   if (keywords) result.keywords = keywords;
 
   return result;
+}
+
+export function sanitizeForFts(input: string): string {
+  return input
+    .replace(/["""*()\[\]^~]/g, ' ')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .map(w => `"${w.replace(/"/g, '')}"`)
+    .join(' ');
 }

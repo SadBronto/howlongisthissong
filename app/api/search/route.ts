@@ -1,10 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { parseQuery } from '@/lib/queryParser';
+import { parseQuery, exactDurationRange } from '@/lib/queryParser';
 import type { Track } from '@/lib/types';
 
-// ±3 seconds tolerance for "exact" duration searches
-const EXACT_TOLERANCE_MS = 3000;
+const LOOSE_SECS = 5; // tolerance when loose=1
 
 function getServiceClient() {
   return createClient(
@@ -14,7 +13,8 @@ function getServiceClient() {
 }
 
 export async function GET(request: NextRequest) {
-  const q = request.nextUrl.searchParams.get('q') ?? '';
+  const q     = request.nextUrl.searchParams.get('q') ?? '';
+  const loose = request.nextUrl.searchParams.get('loose') === '1';
 
   if (!q.trim()) {
     return NextResponse.json({ tracks: [], total: 0 });
@@ -22,20 +22,20 @@ export async function GET(request: NextRequest) {
 
   const parsed = parseQuery(q);
 
-  // Nothing useful to search
-  if (!parsed.keywords && !parsed.exactDuration && parsed.minDuration == null) {
+  if (!parsed.keywords && parsed.exactDuration == null && parsed.minDuration == null) {
     return NextResponse.json({ tracks: [], total: 0 });
   }
 
-  const minDuration =
-    parsed.exactDuration != null
-      ? parsed.exactDuration - EXACT_TOLERANCE_MS
-      : (parsed.minDuration ?? null);
+  // Duration bounds
+  let minDuration: number | null = null;
+  let maxDuration: number | null = null;
 
-  const maxDuration =
-    parsed.exactDuration != null
-      ? parsed.exactDuration + EXACT_TOLERANCE_MS
-      : (parsed.maxDuration ?? null);
+  if (parsed.exactDuration != null) {
+    [minDuration, maxDuration] = exactDurationRange(parsed.exactDuration, loose ? LOOSE_SECS : 0);
+  } else if (parsed.minDuration != null) {
+    minDuration = parsed.minDuration;
+    maxDuration = parsed.maxDuration ?? null;
+  }
 
   const supabase = getServiceClient();
 
@@ -54,9 +54,9 @@ export async function GET(request: NextRequest) {
 
   let tracks: Track[] = data ?? [];
 
-  // For exact duration searches, sort results by proximity to the target
+  // For exact duration: sort by proximity within the window
   if (parsed.exactDuration != null) {
-    const target = parsed.exactDuration;
+    const target = parsed.exactDuration + 500; // midpoint of the display second
     tracks = tracks.sort(
       (a, b) =>
         Math.abs((a.duration_ms ?? 0) - target) -
