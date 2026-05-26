@@ -15,6 +15,17 @@ function json(data: unknown, status = 200) {
   return new Response(JSON.stringify(data), { status, headers: CORS_HEADERS });
 }
 
+// Columns returned in every response — aliasing disambiguation→version to match the Track interface
+const JOINED_COLS = `
+  t.id, t.title, t.artist, t.album, t.duration_ms,
+  t.disambiguation AS version, t.isrc, t.release_year, t.mb_id
+`;
+
+const DIRECT_COLS = `
+  id, title, artist, album, duration_ms,
+  disambiguation AS version, isrc, release_year, mb_id
+`;
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     if (request.method === 'OPTIONS') return new Response(null, { headers: CORS_HEADERS });
@@ -50,8 +61,7 @@ export default {
       if (hasKeywords && hasDuration) {
         const ftsQuery = sanitizeForFts(parsed.keywords!);
         stmt = env.DB.prepare(`
-          SELECT t.id, t.title, t.artist, t.duration_ms,
-                 t.disambiguation, t.isrc, t.release_year, t.mb_id
+          SELECT ${JOINED_COLS}
           FROM tracks_fts
           JOIN tracks t ON t.id = tracks_fts.rowid
           WHERE tracks_fts MATCH ?
@@ -63,8 +73,7 @@ export default {
       } else if (hasKeywords) {
         const ftsQuery = sanitizeForFts(parsed.keywords!);
         stmt = env.DB.prepare(`
-          SELECT t.id, t.title, t.artist, t.duration_ms,
-                 t.disambiguation, t.isrc, t.release_year, t.mb_id
+          SELECT ${JOINED_COLS}
           FROM tracks_fts
           JOIN tracks t ON t.id = tracks_fts.rowid
           WHERE tracks_fts MATCH ?
@@ -74,8 +83,7 @@ export default {
 
       } else {
         stmt = env.DB.prepare(`
-          SELECT id, title, artist, duration_ms,
-                 disambiguation, isrc, release_year, mb_id
+          SELECT ${DIRECT_COLS}
           FROM tracks
           WHERE duration_ms BETWEEN ? AND ?
           ORDER BY duration_ms

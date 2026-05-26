@@ -1,16 +1,23 @@
 /**
  * MusicBrainz → Cloudflare D1 Import
  *
- * Reads recording, artist_credit, and isrc files from the MusicBrainz dump
- * and batch-inserts into Cloudflare D1 via the REST API.
+ * Reads recording, artist_credit, isrc, release, medium, and track files
+ * from the MusicBrainz dump and batch-inserts into Cloudflare D1 via REST API.
  *
  * Usage:
  *   MBDUMP_PATH=/path/to/mbdump npm run import-d1
+ *
+ * Optional flags (env vars):
+ *   SKIP_ALBUM=true   Skip album loading (saves ~3 GB RAM; album column stays null)
  *
  * Required in .env.local:
  *   CLOUDFLARE_ACCOUNT_ID
  *   CLOUDFLARE_API_TOKEN
  *   CLOUDFLARE_D1_DATABASE_ID
+ *
+ * Memory note:
+ *   Album loading builds three in-memory maps from release/medium/track files.
+ *   Expect ~3–4 GB peak RAM. If your machine can't handle it, set SKIP_ALBUM=true.
  */
 
 import * as fs from 'fs';
@@ -24,6 +31,7 @@ const ACCOUNT_ID   = process.env.CLOUDFLARE_ACCOUNT_ID!;
 const API_TOKEN    = process.env.CLOUDFLARE_API_TOKEN!;
 const DATABASE_ID  = process.env.CLOUDFLARE_D1_DATABASE_ID!;
 const MBDUMP_PATH  = process.env.MBDUMP_PATH ?? './mbdump';
+const SKIP_ALBUM   = process.env.SKIP_ALBUM === 'true';
 
 const ROWS_PER_INSERT  = 50;   // rows per INSERT statement
 const STMTS_PER_BATCH  = 20;   // INSERT statements per API call (= 1000 rows/call)
@@ -124,22 +132,97 @@ async function loadIsrcs(): Promise<Map<number, string>> {
   return isrcs;
 }
 
-// ── Step 3: Import recordings ─────────────────────────────────────────────────
+// ── Step 3: Load albums ───────────────────────────────────────────────────────
+// Joins: recording → track.recording → track.medium → medium.release → release.name
+//
+// release columns:  id(0) | gid(1) | name(2) | artist_credit(3) | ...
+// medium  columns:  id(0) | release(1) | position(2) | ...
+// track   columns:  id(0) | gid(1) | recording(2) | medium(3) | ...
+//
+// Memory: ~350 MB (releases) + ~360 MB (mediums) + up to ~3 GB (albums map).
+// Set SKIP_ALBUM=true if your machine can't handle it.
+
+async function loadAlbums(): Promise<Map<number, string>> {
+  if (SKIP_ALBUM) {
+    console.log('SKIP_ALBUM=true — skipping album loading.');
+    return new Map();
+  }
+
+  const releaseFile = path.join(MBDUMP_PATH, 'release');
+  const mediumFile  = path.join(MBDUMP_PATH, 'medium');
+  const trackFile   = path.join(MBDUMP_PATH, 'track');
+
+  const missing = [releaseFile, mediumFile, trackFile].filter(f => !fs.existsSync(f));
+  if (missing.length > 0) {
+    console.warn(`⚠  Missing files for album loading: ${missing.map(f => path.basename(f)).join(', ')}`);
+    console.warn('   Album column will be null. Extract mbdump.tar.bz2 to get these files.');
+    return new Map();
+  }
+
+  // 1. release id → name
+  console.log('Loading releases…');
+  const releases = new Map<number, string>();
+  const rl1 = await streamLines(releaseFile);
+  for await (const line of rl1) {
+    const cols = line.split('\t');
+    if (cols.length < 3) continue;
+    const id   = parseInt(cols[0], 10);
+    const name = nullStr(cols[2]);
+    if (!isNaN(id) && name) releases.set(id, name);
+  }
+  console.log(`  ${releases.size.toLocaleString()} releases loaded`);
+
+  // 2. medium id → release id
+  console.log('Loading mediums…');
+  const mediums = new Map<number, number>();
+  const rl2 = await streamLines(mediumFile);
+  for await (const line of rl2) {
+    const cols = line.split('\t');
+    if (cols.length < 2) continue;
+    const id        = parseInt(cols[0], 10);
+    const releaseId = parseInt(cols[1], 10);
+    if (!isNaN(id) && !isNaN(releaseId)) mediums.set(id, releaseId);
+  }
+  console.log(`  ${mediums.size.toLocaleString()} mediums loaded`);
+
+  // 3. recording id → album name (first release encountered per recording)
+  console.log('Mapping recordings → albums…');
+  const albums = new Map<number, string>();
+  const rl3 = await streamLines(trackFile);
+  for await (const line of rl3) {
+    const cols = line.split('\t');
+    if (cols.length < 4) continue;
+    const recordingId = parseInt(cols[2], 10);
+    const mediumId    = parseInt(cols[3], 10);
+    if (isNaN(recordingId) || isNaN(mediumId) || albums.has(recordingId)) continue;
+    const releaseId  = mediums.get(mediumId);
+    if (releaseId == null) continue;
+    const albumName  = releases.get(releaseId);
+    if (albumName) albums.set(recordingId, albumName);
+  }
+  console.log(`  ${albums.size.toLocaleString()} recording→album mappings built`);
+
+  return albums;
+}
+
+// ── Step 4: Import recordings ─────────────────────────────────────────────────
 // recording columns: id | gid | name | artist_credit | length | comment | ...
 
 type Row = {
   title:          string;
   artist:         string | null;
+  album:          string | null;
   duration_ms:    number;
   disambiguation: string | null;
   isrc:           string | null;
-  release_year:   null;   // not in recording table; would need release join
+  release_year:   null;   // requires release join; kept for schema compat
   mb_id:          string;
 };
 
 async function importRecordings(
   artistCredits: Map<number, string>,
-  isrcs: Map<number, string>
+  isrcs:         Map<number, string>,
+  albums:        Map<number, string>
 ) {
   const filePath = path.join(MBDUMP_PATH, 'recording');
   if (!fs.existsSync(filePath)) {
@@ -159,23 +242,21 @@ async function importRecordings(
   const flush = async (force = false) => {
     if (pending.length === 0) return;
 
-    // Build INSERT statements from pending rows
     while (pending.length >= ROWS_PER_INSERT || (force && pending.length > 0)) {
       const chunk = pending.splice(0, ROWS_PER_INSERT);
-      const placeholders = chunk.map(() => '(?,?,?,?,?,?,?)').join(',');
+      const placeholders = chunk.map(() => '(?,?,?,?,?,?,?,?)').join(',');
       const params = chunk.flatMap(r => [
-        r.title, r.artist, r.duration_ms,
+        r.title, r.artist, r.album, r.duration_ms,
         r.disambiguation, r.isrc, r.release_year, r.mb_id,
       ]);
       allStmts.push({
         sql: `INSERT OR IGNORE INTO tracks
-              (title, artist, duration_ms, disambiguation, isrc, release_year, mb_id)
+              (title, artist, album, duration_ms, disambiguation, isrc, release_year, mb_id)
               VALUES ${placeholders}`,
         params,
       });
     }
 
-    // Send batches to D1
     while (allStmts.length >= STMTS_PER_BATCH || (force && allStmts.length > 0)) {
       const batch = allStmts.splice(0, STMTS_PER_BATCH);
       try {
@@ -187,7 +268,7 @@ async function importRecordings(
         errors++;
       }
       if (total % 50_000 < ROWS_PER_INSERT * STMTS_PER_BATCH) {
-        console.log(`  ${total.toLocaleString()} imported, ${skipped.toLocaleString()} skipped, ${errors} errors`);
+        process.stdout.write(`\r  ${total.toLocaleString()} imported, ${skipped.toLocaleString()} skipped, ${errors} errors`);
       }
     }
   };
@@ -208,6 +289,7 @@ async function importRecordings(
     pending.push({
       title,
       artist:         artistCreditId != null ? (artistCredits.get(artistCreditId) ?? null) : null,
+      album:          recId != null ? (albums.get(recId) ?? null) : null,
       duration_ms:    lengthMs,
       disambiguation: comment,
       isrc:           recId != null ? (isrcs.get(recId) ?? null) : null,
@@ -240,12 +322,14 @@ async function main() {
   }
 
   console.log('MusicBrainz → Cloudflare D1');
-  console.log(`  Dump path: ${MBDUMP_PATH}`);
+  console.log(`  Dump path:   ${MBDUMP_PATH}`);
+  console.log(`  Skip album:  ${SKIP_ALBUM}`);
   console.log('');
 
   const artistCredits = await loadArtistCredits();
   const isrcs         = await loadIsrcs();
-  await importRecordings(artistCredits, isrcs);
+  const albums        = await loadAlbums();
+  await importRecordings(artistCredits, isrcs, albums);
 }
 
 main().catch(err => { console.error(err); process.exit(1); });
