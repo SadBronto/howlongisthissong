@@ -7,17 +7,26 @@ import TrackCard from './TrackCard';
 
 type SortMode = 'default' | 'duration-asc' | 'duration-desc';
 
+// Slider steps: 0 = exact, then 500ms increments up to 5000ms
+const TOLERANCE_STEPS = [0, 500, 1000, 1500, 2000, 2500, 3000, 3500, 4000, 4500, 5000];
+
+function toleranceLabel(ms: number) {
+  if (ms === 0) return 'Exact';
+  if (ms < 1000) return `±${ms}ms`;
+  return `±${ms / 1000}s`;
+}
+
 interface SearchResultsProps {
-  results:       SearchResult | null;
-  loading:       boolean;
-  query:         string;
-  loose:         boolean;
-  isExactTime:   boolean;
-  onLooseChange: (val: boolean) => void;
+  results:          SearchResult | null;
+  loading:          boolean;
+  query:            string;
+  tolerance:        number;  // ms
+  isExactTime:      boolean;
+  onToleranceChange: (ms: number) => void;
 }
 
 export default function SearchResults({
-  results, loading, loose, isExactTime, onLooseChange,
+  results, loading, tolerance, isExactTime, onToleranceChange,
 }: SearchResultsProps) {
   const [sort, setSort] = useState<SortMode>('default');
 
@@ -33,7 +42,8 @@ export default function SearchResults({
     return (
       <div className="mt-4 space-y-1">
         {[...Array(8)].map((_, i) => (
-          <div key={i} className="h-16 bg-gray-100 rounded-lg animate-pulse" style={{ opacity: 1 - i * 0.1 }} />
+          <div key={i} className="h-16 bg-gray-100 rounded-lg animate-pulse"
+            style={{ opacity: 1 - i * 0.1 }} />
         ))}
       </div>
     );
@@ -42,20 +52,19 @@ export default function SearchResults({
   if (!results) return null;
 
   const { total, parsed } = results;
+  const sliderIndex = TOLERANCE_STEPS.indexOf(tolerance);
 
   if (tracks.length === 0) {
     return (
-      <div className="mt-8">
-        <p className="text-gray-600 font-medium text-center">No results found.</p>
-        {isExactTime && !loose && (
-          <div className="mt-4 text-center">
-            <button
-              onClick={() => onLooseChange(true)}
-              className="text-sm text-blue-600 hover:underline"
-            >
-              Try ±5 seconds
-            </button>
-          </div>
+      <div className="mt-8 text-center">
+        <p className="text-gray-600 font-medium">No results found.</p>
+        {isExactTime && tolerance === 0 && (
+          <button
+            onClick={() => onToleranceChange(500)}
+            className="mt-3 text-sm text-blue-600 hover:underline"
+          >
+            Widen to ±500ms?
+          </button>
         )}
       </div>
     );
@@ -64,35 +73,48 @@ export default function SearchResults({
   return (
     <div className="mt-2">
       {/* ── Controls bar ── */}
-      <div className="flex items-center justify-between mb-2 px-1 flex-wrap gap-2 min-h-[2rem]">
+      <div className="flex items-start justify-between mb-2 px-1 flex-wrap gap-2">
         {/* Result count + context */}
-        <p className="text-sm text-gray-500">
+        <p className="text-sm text-gray-500 pt-1">
           <span className="font-medium text-gray-700">{total.toLocaleString()}</span>{' '}
           {total === 1 ? 'result' : 'results'}
           {parsed?.exactDuration != null && (
-            <> — exactly <span className="font-mono text-gray-700">{formatDuration(parsed.exactDuration)}</span>
-            {loose && <span className="text-gray-400"> ±5s</span>}</>
+            <>
+              {' '}— <span className="font-mono text-gray-700">{formatDuration(parsed.exactDuration)}</span>
+              {tolerance > 0 && (
+                <span className="text-gray-400"> {toleranceLabel(tolerance)}</span>
+              )}
+            </>
           )}
           {parsed?.minDuration != null && parsed?.maxDuration != null && !parsed?.exactDuration && (
-            <> — <span className="font-mono text-gray-700">{formatDuration(parsed.minDuration)}</span>
-            {' to '}
-            <span className="font-mono text-gray-700">{formatDuration(parsed.maxDuration)}</span></>
+            <>
+              {' '}— <span className="font-mono text-gray-700">{formatDuration(parsed.minDuration)}</span>
+              {' to '}
+              <span className="font-mono text-gray-700">{formatDuration(parsed.maxDuration)}</span>
+            </>
           )}
           {total === 100 && <span className="text-gray-400"> (top 100)</span>}
         </p>
 
-        <div className="flex items-center gap-3">
-          {/* ±5s toggle — only for exact time searches */}
+        <div className="flex items-center gap-4">
+          {/* Tolerance slider — only for exact time searches */}
           {isExactTime && (
-            <label className="flex items-center gap-1.5 text-sm text-gray-500 cursor-pointer select-none">
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-gray-400 w-10 text-right tabular-nums">
+                {toleranceLabel(tolerance)}
+              </span>
               <input
-                type="checkbox"
-                checked={loose}
-                onChange={e => onLooseChange(e.target.checked)}
-                className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                type="range"
+                min={0}
+                max={TOLERANCE_STEPS.length - 1}
+                step={1}
+                value={sliderIndex === -1 ? 0 : sliderIndex}
+                onChange={e => onToleranceChange(TOLERANCE_STEPS[parseInt(e.target.value)])}
+                className="w-28 accent-blue-600"
+                title="Duration tolerance"
               />
-              <span>±5 seconds</span>
-            </label>
+              <span className="text-xs text-gray-400">±5s</span>
+            </div>
           )}
 
           {/* Sort */}
@@ -105,24 +127,23 @@ export default function SearchResults({
                 className="text-xs text-gray-500 border border-gray-200 rounded px-2 py-1 bg-white focus:outline-none focus:border-blue-400"
               >
                 <option value="default">Sort: relevance</option>
-                <option value="duration-asc">Sort: shortest first</option>
-                <option value="duration-desc">Sort: longest first</option>
+                <option value="duration-asc">Shortest first</option>
+                <option value="duration-desc">Longest first</option>
               </select>
             )
           }
         </div>
       </div>
 
-      {/* Divider */}
       <div className="border-t border-gray-100 mb-1" />
 
-      {/* Track list */}
       <div>
         {tracks.map(track => (
           <TrackCard
             key={track.id}
             track={track}
             exactDuration={parsed?.exactDuration}
+            tolerance={tolerance}
           />
         ))}
       </div>

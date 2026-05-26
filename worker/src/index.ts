@@ -11,37 +11,31 @@ const CORS_HEADERS = {
   'Content-Type': 'application/json',
 };
 
-const LOOSE_SECS = 5;
-
 function json(data: unknown, status = 200) {
   return new Response(JSON.stringify(data), { status, headers: CORS_HEADERS });
 }
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
-    if (request.method === 'OPTIONS') {
-      return new Response(null, { headers: CORS_HEADERS });
-    }
+    if (request.method === 'OPTIONS') return new Response(null, { headers: CORS_HEADERS });
 
-    const url   = new URL(request.url);
-    const q     = url.searchParams.get('q') ?? '';
-    const loose = url.searchParams.get('loose') === '1';
+    const url       = new URL(request.url);
+    const q         = url.searchParams.get('q') ?? '';
+    const tolerance = parseInt(url.searchParams.get('tolerance') ?? '0', 10) || 0;
 
     if (url.pathname !== '/search') return json({ error: 'Not found' }, 404);
     if (!q.trim()) return json({ tracks: [], total: 0 });
 
     const parsed = parseQuery(q);
-
     if (!parsed.keywords && parsed.exactDuration == null && parsed.minDuration == null) {
       return json({ tracks: [], total: 0 });
     }
 
-    // Duration bounds
     let minDuration: number | null = null;
     let maxDuration: number | null = null;
 
     if (parsed.exactDuration != null) {
-      [minDuration, maxDuration] = exactDurationRange(parsed.exactDuration, loose ? LOOSE_SECS : 0);
+      [minDuration, maxDuration] = exactDurationRange(parsed.exactDuration, tolerance / 1000);
     } else if (parsed.minDuration != null) {
       minDuration = parsed.minDuration;
       maxDuration = parsed.maxDuration ?? null;
@@ -90,11 +84,9 @@ export default {
       }
 
       const result = await stmt.all();
-      const tracks = result.results ?? [];
-
       return json({
-        tracks,
-        total: tracks.length,
+        tracks: result.results ?? [],
+        total:  (result.results ?? []).length,
         parsed: {
           keywords:      parsed.keywords,
           exactDuration: parsed.exactDuration,

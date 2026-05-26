@@ -3,8 +3,6 @@ import { createClient } from '@supabase/supabase-js';
 import { parseQuery, exactDurationRange } from '@/lib/queryParser';
 import type { Track } from '@/lib/types';
 
-const LOOSE_SECS = 5; // tolerance when loose=1
-
 function getServiceClient() {
   return createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -13,32 +11,27 @@ function getServiceClient() {
 }
 
 export async function GET(request: NextRequest) {
-  const q     = request.nextUrl.searchParams.get('q') ?? '';
-  const loose = request.nextUrl.searchParams.get('loose') === '1';
+  const q         = request.nextUrl.searchParams.get('q') ?? '';
+  const tolerance = parseInt(request.nextUrl.searchParams.get('tolerance') ?? '0', 10) || 0;
 
-  if (!q.trim()) {
-    return NextResponse.json({ tracks: [], total: 0 });
-  }
+  if (!q.trim()) return NextResponse.json({ tracks: [], total: 0 });
 
   const parsed = parseQuery(q);
-
   if (!parsed.keywords && parsed.exactDuration == null && parsed.minDuration == null) {
     return NextResponse.json({ tracks: [], total: 0 });
   }
 
-  // Duration bounds
   let minDuration: number | null = null;
   let maxDuration: number | null = null;
 
   if (parsed.exactDuration != null) {
-    [minDuration, maxDuration] = exactDurationRange(parsed.exactDuration, loose ? LOOSE_SECS : 0);
+    [minDuration, maxDuration] = exactDurationRange(parsed.exactDuration, tolerance / 1000);
   } else if (parsed.minDuration != null) {
     minDuration = parsed.minDuration;
     maxDuration = parsed.maxDuration ?? null;
   }
 
   const supabase = getServiceClient();
-
   const { data, error } = await supabase.rpc('search_tracks', {
     p_query:        parsed.keywords ?? null,
     p_min_duration: minDuration,
@@ -52,17 +45,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Search failed' }, { status: 500 });
   }
 
-  let tracks: Track[] = data ?? [];
-
-  // For exact duration: sort by proximity within the window
-  if (parsed.exactDuration != null) {
-    const target = parsed.exactDuration + 500; // midpoint of the display second
-    tracks = tracks.sort(
-      (a, b) =>
-        Math.abs((a.duration_ms ?? 0) - target) -
-        Math.abs((b.duration_ms ?? 0) - target)
-    );
-  }
+  const tracks: Track[] = data ?? [];
 
   return NextResponse.json({
     tracks,

@@ -2,34 +2,41 @@ import type { Track } from '@/lib/types';
 import { formatDuration } from '@/lib/queryParser';
 
 interface TrackCardProps {
-  track:         Track;
+  track:          Track;
   exactDuration?: number;
+  tolerance?:     number; // ms
 }
 
-export default function TrackCard({ track, exactDuration }: TrackCardProps) {
+export default function TrackCard({ track, exactDuration, tolerance = 0 }: TrackCardProps) {
   const duration = track.duration_ms != null ? formatDuration(track.duration_ms) : '?:??';
 
-  // Highlight if this is an exact duration match
+  // Blue = exactly the typed time (within the 1-second display window)
+  // Gray = within tolerance but not exact
   const isExact =
     exactDuration != null && track.duration_ms != null
       ? track.duration_ms >= exactDuration && track.duration_ms <= exactDuration + 999
+      : false;
+
+  const isInTolerance =
+    !isExact && exactDuration != null && track.duration_ms != null && tolerance > 0
+      ? track.duration_ms >= exactDuration - tolerance &&
+        track.duration_ms <= exactDuration + 999 + tolerance
       : false;
 
   return (
     <div className="flex items-center gap-3 sm:gap-4 py-3 px-3 rounded-lg hover:bg-gray-50 transition-colors">
       {/* Duration */}
       <div className={`flex-shrink-0 font-mono text-base sm:text-lg font-semibold w-12 sm:w-14 text-right tabular-nums ${
-        isExact ? 'text-blue-600' : 'text-gray-600'
+        isExact        ? 'text-blue-600' :
+        isInTolerance  ? 'text-blue-400' :
+                         'text-gray-600'
       }`}>
         {duration}
       </div>
 
-      {/* Separator */}
       <div className="w-px h-10 bg-gray-200 flex-shrink-0" />
 
-      {/* Track info */}
       <div className="flex-1 min-w-0">
-        {/* Title + disambiguation on same line */}
         <div className="flex items-baseline gap-2 flex-wrap leading-snug">
           <span className="font-medium text-gray-900">{track.title}</span>
           {track.version && (
@@ -38,12 +45,8 @@ export default function TrackCard({ track, exactDuration }: TrackCardProps) {
             </span>
           )}
         </div>
-
-        {/* Artist · Album · Year */}
         <div className="flex items-center gap-1 text-sm mt-0.5 flex-wrap">
-          {track.artist && (
-            <span className="text-gray-600 truncate">{track.artist}</span>
-          )}
+          {track.artist && <span className="text-gray-600 truncate">{track.artist}</span>}
           {track.album && (
             <>
               <span className="text-gray-300 flex-shrink-0">·</span>
