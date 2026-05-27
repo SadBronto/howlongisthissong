@@ -137,6 +137,16 @@ export default function SearchResults({
 
       <div className="border-t border-gray-100 mb-1" />
 
+      {/* Enrichment disclaimer */}
+      <p className="text-xs text-gray-400 px-1 py-2 leading-relaxed">
+        Popularity scores and genre tags are collected gradually — building it
+        all up front would take weeks and cost a fortune. Songs that appear in
+        searches get analyzed first, so the most-searched music gets fleshed
+        out first. Scores appear as they trickle in.
+      </p>
+
+      <div className="border-t border-gray-100 mb-1" />
+
       <div>
         {tracks.map(track => (
           <TrackCard

@@ -59,8 +59,29 @@ export default function TrackCard({ track, exactDuration, tolerance = 0 }: Track
               <span className="text-gray-400 flex-shrink-0">{track.release_year}</span>
             </>
           )}
+          {track.genre && (
+            <>
+              <span className="text-gray-300 flex-shrink-0">·</span>
+              <span className="text-xs text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded-full flex-shrink-0">
+                {track.genre}
+              </span>
+            </>
+          )}
         </div>
       </div>
+
+      {/* Listen count — only shown once enriched */}
+      {track.listen_count != null && track.listen_count > 0 && (
+        <div className="flex-shrink-0 text-right" title={`${track.listen_count.toLocaleString()} listens on ListenBrainz`}>
+          <span className="text-xs text-gray-300">
+            {track.listen_count >= 1_000_000
+              ? `${(track.listen_count / 1_000_000).toFixed(1)}M`
+              : track.listen_count >= 1_000
+              ? `${Math.round(track.listen_count / 1_000)}K`
+              : String(track.listen_count)}
+          </span>
+        </div>
+      )}
     </div>
   );
 }
