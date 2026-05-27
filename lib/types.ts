@@ -6,6 +6,9 @@ export interface Track {
   version: string | null;       // disambiguation field
   duration_ms: number | null;
   release_year: number | null;
+  release_type: string | null;    // Album / Single / EP / etc.
+  label: string | null;           // record label
+  track_number: number | null;    // position on the album
   source: string | null;
   mb_id: string | null;
   external_ids: Record<string, string>;

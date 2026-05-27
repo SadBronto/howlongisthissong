@@ -9,7 +9,9 @@
     "lint": "next lint",
     "seed": "tsx scripts/seed-sample.ts",
     "import-mb": "tsx scripts/import-musicbrainz.ts",
-    "import-d1": "tsx scripts/import-d1.ts"
+    "import-d1": "tsx scripts/import-d1.ts",
+    "delete-non-isrc": "tsx scripts/delete-non-isrc.ts",
+    "enrich-d1": "tsx scripts/enrich-d1.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.4",

@@ -50,13 +50,28 @@ export default function TrackCard({ track, exactDuration, tolerance = 0 }: Track
           {track.album && (
             <>
               <span className="text-gray-300 flex-shrink-0">·</span>
-              <span className="text-gray-400 truncate">{track.album}</span>
+              <span className="text-gray-400 truncate italic">{track.album}</span>
             </>
+          )}
+          {track.track_number && track.album && (
+            <span className="text-gray-300 flex-shrink-0">#{track.track_number}</span>
           )}
           {track.release_year && (
             <>
               <span className="text-gray-300 flex-shrink-0">·</span>
               <span className="text-gray-400 flex-shrink-0">{track.release_year}</span>
+            </>
+          )}
+          {track.release_type && (
+            <>
+              <span className="text-gray-300 flex-shrink-0">·</span>
+              <span className="text-gray-400 flex-shrink-0">{track.release_type}</span>
+            </>
+          )}
+          {track.label && (
+            <>
+              <span className="text-gray-300 flex-shrink-0">·</span>
+              <span className="text-gray-400 truncate">{track.label}</span>
             </>
           )}
           {track.genre && (
