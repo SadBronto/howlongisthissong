@@ -62,13 +62,13 @@ export default function TrackCard({ track, exactDuration, tolerance = 0 }: Track
           {track.release_type && (
             <>
               <span className="text-gray-300 flex-shrink-0">·</span>
-              <span className="text-gray-400 flex-shrink-0">{track.release_type}</span>
+              <span className="text-gray-400 flex-shrink-0"><em>{track.release_type}</em> Release</span>
             </>
           )}
           {track.label && (
             <>
               <span className="text-gray-300 flex-shrink-0">·</span>
-              <span className="text-gray-400 truncate">{track.label}</span>
+              <span className="text-gray-400 truncate">Label: {track.label}</span>
             </>
           )}
           {track.genre && (
