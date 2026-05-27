@@ -1,8 +1,12 @@
-name            = "howlongisthissong-search"
-main            = "src/index.ts"
+name               = "howlongisthissong-search"
+main               = "src/index.ts"
 compatibility_date = "2024-09-23"
 
 [[d1_databases]]
-binding      = "DB"
+binding       = "DB"
 database_name = "howlongisthissong"
-database_id  = "PLACEHOLDER"   # replace after: wrangler d1 create howlongisthissong
+database_id   = "c4fa886f-3387-4f3f-baa1-a2a56954b836"
+
+# Cron: runs every 5 minutes, enriches 200 unscored tracks with Spotify popularity
+[triggers]
+crons = ["*/5 * * * *"]

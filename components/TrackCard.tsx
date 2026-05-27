@@ -70,17 +70,13 @@ export default function TrackCard({ track, exactDuration, tolerance = 0 }: Track
         </div>
       </div>
 
-      {/* Listen count — only shown once enriched */}
-      {track.listen_count != null && track.listen_count > 0 && (
-        <div className="flex-shrink-0 text-right" title={`${track.listen_count.toLocaleString()} listens on ListenBrainz`}>
-          <span className="text-xs text-gray-300">
-            {track.listen_count >= 1_000_000
-              ? `${(track.listen_count / 1_000_000).toFixed(1)}M`
-              : track.listen_count >= 1_000
-              ? `${Math.round(track.listen_count / 1_000)}K`
-              : String(track.listen_count)}
-          </span>
-        </div>
+      {/* Popularity dot — only shown once enriched, not shown for -1 (not on Spotify) */}
+      {track.popularity != null && track.popularity >= 0 && (
+        <div
+          className="flex-shrink-0 w-1.5 h-1.5 rounded-full bg-blue-200"
+          style={{ opacity: 0.3 + (track.popularity / 100) * 0.7 }}
+          title={`Popularity: ${track.popularity}/100 (Spotify)`}
+        />
       )}
     </div>
   );

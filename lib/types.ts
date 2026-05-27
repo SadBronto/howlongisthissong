@@ -9,8 +9,8 @@ export interface Track {
   source: string | null;
   mb_id: string | null;
   external_ids: Record<string, string>;
-  genre: string | null;         // top genre tag; null until enriched
-  listen_count: number | null;  // from ListenBrainz; null until enriched
+  genre: string | null;       // top genre tag; null until enriched
+  popularity: number | null;  // Spotify score 0–100; -1 = not on Spotify; null = unchecked
   relevance?: number;
 }
 

@@ -5,7 +5,32 @@
       "Bash(git add *)",
       "Bash(git commit *)",
       "Bash(git remote *)",
-      "Bash(git config *)"
+      "Bash(git config *)",
+      "Bash(git push *)",
+      "Bash(git branch *)",
+      "Bash(npm --version)",
+      "Bash(npm install *)",
+      "Bash(npm run *)",
+      "Bash(tar -xjf mbdump.tar.bz2)",
+      "Bash(MBDUMP_PATH=./mbdump npm run import-mb)",
+      "Bash(pkill -f \"import-musicbrainz\")",
+      "Bash(pkill -f \"tsx\")",
+      "Bash(node -e ' *)",
+      "Bash(node --max-old-space-size=512 -e ' *)",
+      "Bash(node --max-old-space-size=1024 *)",
+      "Bash(awk --version)",
+      "Bash(awk -F'\\\\t' '{print $2}' mbdump/isrc)",
+      "Bash(# Show sample of all results \\(col 3 = title, col 5 = disambiguation\\) *)",
+      "Bash(awk -F'\\\\t' '$2 != \"\\\\\\\\N\" {count++} END {print count \" recordings have ratings\"}' \"C:\\\\Users\\\\qtcor\\\\OneDrive\\\\Desktop\\\\Song Length\\\\mbdump/recording_meta\")",
+      "Bash(awk -F'\\\\t' 'BEGIN{count=0} $2 != \"\\\\\\\\N\" && $2 != \"\" {count++} END {print count \" recordings have non-null ratings\"}' \"C:\\\\Users\\\\qtcor\\\\OneDrive\\\\Desktop\\\\Song Length\\\\mbdump/recording_meta\")",
+      "Bash(awk -F'\\\\t' '$2 != \"\\\\\\\\N\" && $2 != \"\" {print; count++; if\\(count>=10\\) exit}' \"C:\\\\Users\\\\qtcor\\\\OneDrive\\\\Desktop\\\\Song Length\\\\mbdump/recording_meta\")",
+      "Bash(awk -F'\\\\t' '{print $2}' \"C:\\\\Users\\\\qtcor\\\\OneDrive\\\\Desktop\\\\Song Length\\\\mbdump/recording_tag\")",
+      "Bash(awk '-F\\\\t' 'NR==FNR{tags[$1]=$2; next} \\($2 in tags\\){print tags[$2], \"| votes:\", $3}' 'C:\\\\Users\\\\qtcor\\\\OneDrive\\\\Desktop\\\\Song Length\\\\mbdump/tag' 'C:\\\\Users\\\\qtcor\\\\OneDrive\\\\Desktop\\\\Song Length\\\\mbdump/recording_tag')",
+      "WebFetch(domain:listenbrainz.org)",
+      "WebFetch(domain:metabrainz.org)",
+      "WebFetch(domain:listenbrainz.readthedocs.io)",
+      "WebFetch(domain:api.listenbrainz.org)",
+      "WebFetch(domain:ftp.musicbrainz.org)"
     ]
   }
 }

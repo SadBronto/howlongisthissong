@@ -13,8 +13,8 @@ CREATE TABLE IF NOT EXISTS tracks (
   isrc           TEXT,        -- International Standard Recording Code
   release_year   INTEGER,
   mb_id          TEXT UNIQUE, -- MusicBrainz recording GUID
-  genre          TEXT,        -- top genre tag; filled in lazily via background enrichment
-  listen_count   INTEGER      -- from ListenBrainz; filled in lazily via background enrichment
+  genre          TEXT,        -- top genre tag; filled lazily via MusicBrainz API
+  popularity     INTEGER      -- Spotify popularity 0–100; -1 = not on Spotify; NULL = unchecked
 );
 
 -- Full-text search index (title + artist + album)
@@ -50,7 +50,7 @@ CREATE TRIGGER IF NOT EXISTS tracks_au AFTER UPDATE ON tracks BEGIN
 END;
 
 -- Indexes
-CREATE INDEX IF NOT EXISTS idx_duration    ON tracks(duration_ms);
-CREATE INDEX IF NOT EXISTS idx_isrc        ON tracks(isrc)         WHERE isrc        IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_mb_id       ON tracks(mb_id)        WHERE mb_id       IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_listen      ON tracks(listen_count)  WHERE listen_count IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_duration   ON tracks(duration_ms);
+CREATE INDEX IF NOT EXISTS idx_isrc       ON tracks(isrc)       WHERE isrc       IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_mb_id      ON tracks(mb_id)      WHERE mb_id      IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_popularity ON tracks(popularity)  WHERE popularity IS NOT NULL;
