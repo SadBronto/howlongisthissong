@@ -1,20 +1,38 @@
 export interface ParsedQuery {
   keywords?: string;
-  exactDuration?: number;  // ms — the floor of the typed time (e.g. "3:15" → 195000)
-  minDuration?: number;    // ms — explicit range min
-  maxDuration?: number;    // ms — explicit range max
+  exactDuration?: number;         // ms — floor of the typed time
+  exactDurationWindowMs?: number; // 1000 for M:SS | 100 for M:SS.M | 10 | 1
+  minDuration?: number;           // ms — range / open-ended lower bound
+  maxDuration?: number;           // ms — range / open-ended upper bound
   raw: string;
   isEmpty: boolean;
 }
 
-// "3:15" typed → 195000ms
-function parseDuration(str: string): number {
-  const parts = str.split(':').map(Number);
-  if (parts.length === 2) {
-    const [min, sec] = parts;
-    if (!isNaN(min) && !isNaN(sec)) return (min * 60 + sec) * 1000;
-  }
-  return 0;
+// Duration token: M:SS or M:SS.mmm (1–3 ms digits)
+const DUR = String.raw`\d{1,2}:\d{2}(?:\.\d{1,3})?`;
+
+function parseDurationMs(str: string): number {
+  const m = str.match(/^(\d{1,2}):(\d{2})(?:\.(\d{1,3}))?$/);
+  if (!m) return 0;
+  const base = (parseInt(m[1], 10) * 60 + parseInt(m[2], 10)) * 1000;
+  return base + (m[3] ? parseInt(m[3].padEnd(3, '0'), 10) : 0);
+}
+
+/** How many ms wide the display "window" is for a typed duration string. */
+function windowMsFor(str: string): number {
+  const m = str.match(/\.(\d{1,3})$/);
+  if (!m) return 1000;
+  return Math.pow(10, 3 - m[1].length); // .4→100  .42→10  .423→1
+}
+
+/** Given exactDuration + its window, return the [min, max] ms range to query.
+ *  looseSecs widens both sides (tolerance slider). */
+export function exactDurationRange(
+  ms:        number,
+  windowMs = 1000,
+  looseSecs = 0,
+): [number, number] {
+  return [ms - looseSecs * 1000, ms + windowMs - 1 + looseSecs * 1000];
 }
 
 export function formatDuration(ms: number, showMs = false): string {
@@ -27,41 +45,56 @@ export function formatDuration(ms: number, showMs = false): string {
   return `${base}.${millis.toString().padStart(3, '0')}`;
 }
 
-// Given an exactDuration, return the ms range that displays as that time.
-// "3:15" = 195000ms–195999ms — everything that renders as "3:15".
-export function exactDurationRange(ms: number, looseSecs = 0): [number, number] {
-  return [ms - looseSecs * 1000, ms + 999 + looseSecs * 1000];
-}
-
 export function parseQuery(input: string): ParsedQuery {
   let q = input.trim();
   const result: ParsedQuery = { raw: input, isEmpty: !q };
   if (!q) return result;
 
-  // "between X and Y"
-  const betweenMatch = q.match(/between\s+(\d{1,2}:\d{2})\s+and\s+(\d{1,2}:\d{2})/i);
-  if (betweenMatch) {
-    result.minDuration = parseDuration(betweenMatch[1]);
-    result.maxDuration = parseDuration(betweenMatch[2]) + 999;
-    q = q.replace(betweenMatch[0], '').trim();
+  // ── "between X and Y" ──────────────────────────────────────────────────────
+  const betweenRe = new RegExp(`between\\s+(${DUR})\\s+and\\s+(${DUR})`, 'i');
+  const bm = q.match(betweenRe);
+  if (bm) {
+    result.minDuration = parseDurationMs(bm[1]);
+    result.maxDuration = parseDurationMs(bm[2]) + windowMsFor(bm[2]) - 1;
+    q = q.replace(bm[0], '').trim();
   }
 
-  // "X to Y" or "X-Y" range (if no between match)
-  if (!result.minDuration) {
-    const rangeMatch = q.match(/(\d{1,2}:\d{2})\s*(?:to|-)\s*(\d{1,2}:\d{2})/i);
-    if (rangeMatch) {
-      result.minDuration = parseDuration(rangeMatch[1]);
-      result.maxDuration = parseDuration(rangeMatch[2]) + 999;
-      q = q.replace(rangeMatch[0], '').trim();
+  // ── "X to Y" or "X–Y" range ───────────────────────────────────────────────
+  if (result.minDuration == null) {
+    const rangeRe = new RegExp(`(${DUR})\\s*(?:to|-)\\s*(${DUR})`, 'i');
+    const rm = q.match(rangeRe);
+    if (rm) {
+      result.minDuration = parseDurationMs(rm[1]);
+      result.maxDuration = parseDurationMs(rm[2]) + windowMsFor(rm[2]) - 1;
+      q = q.replace(rm[0], '').trim();
     }
   }
 
-  // Single exact duration "3:15"
-  if (!result.minDuration) {
-    const exactMatch = q.match(/\b(\d{1,2}:\d{2})\b/);
-    if (exactMatch) {
-      result.exactDuration = parseDuration(exactMatch[1]);
-      q = q.replace(exactMatch[0], '').trim();
+  // ── ">X" longer-than / "<X" shorter-than (open-ended, can coexist) ────────
+  if (result.minDuration == null && result.maxDuration == null) {
+    const overRe  = new RegExp(`>\\s*(${DUR})`);
+    const underRe = new RegExp(`<\\s*(${DUR})`);
+    const om = q.match(overRe);
+    const um = q.match(underRe);
+    if (om) {
+      result.minDuration = parseDurationMs(om[1]);
+      q = q.replace(om[0], '').trim();
+    }
+    if (um) {
+      // "<5:00" → exclude the 5:00 window itself
+      result.maxDuration = parseDurationMs(um[1]) - 1;
+      q = q.replace(um[0], '').trim();
+    }
+  }
+
+  // ── Single exact duration ─────────────────────────────────────────────────
+  if (result.minDuration == null && result.maxDuration == null) {
+    const exactRe = new RegExp(`\\b(${DUR})\\b`);
+    const em = q.match(exactRe);
+    if (em) {
+      result.exactDuration      = parseDurationMs(em[1]);
+      result.exactDurationWindowMs = windowMsFor(em[1]);
+      q = q.replace(em[0], '').trim();
     }
   }
 

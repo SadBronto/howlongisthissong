@@ -9,20 +9,75 @@ import type { SearchResult } from '@/lib/types';
 
 const EXAMPLES = [
   { label: '3:16',                  hint: 'exact duration' },
+  { label: '3:16.423',              hint: 'millisecond precision' },
+  { label: '>10:00',                hint: 'longer than 10 minutes' },
   { label: 'love 4:20',             hint: 'keyword + time' },
   { label: 'between 3:00 and 4:00', hint: 'range' },
   { label: 'bohemian rhapsody',     hint: 'by title' },
   { label: 'pink floyd',            hint: 'by artist' },
-  { label: 'free bird',             hint: 'classic' },
 ];
 
 type DurationMode = 'exact' | 'range';
 
-// Shared style for advanced-form inputs
+const RELEASE_TYPES = ['', 'Album', 'Single', 'EP', 'Broadcast', 'Other'] as const;
+const RELEASE_TYPE_LABELS: Record<string, string> = {
+  '': 'Any type', Album: 'Album', Single: 'Single',
+  EP: 'EP', Broadcast: 'Broadcast', Other: 'Other',
+};
+
+const DECADES = [
+  { label: '60s', from: '1960', to: '1969' },
+  { label: '70s', from: '1970', to: '1979' },
+  { label: '80s', from: '1980', to: '1989' },
+  { label: '90s', from: '1990', to: '1999' },
+  { label: '00s', from: '2000', to: '2009' },
+  { label: '10s', from: '2010', to: '2019' },
+  { label: '20s', from: '2020', to: '2029' },
+];
+
+// ── Filter state type ─────────────────────────────────────────────────────────
+interface Filters {
+  genre:       string;
+  yearFrom:    string;
+  yearTo:      string;
+  releaseType: string;
+  label:       string;
+}
+const EMPTY_FILTERS: Filters = { genre: '', yearFrom: '', yearTo: '', releaseType: '', label: '' };
+
+function filtersFromParams(sp: URLSearchParams): Filters {
+  return {
+    genre:       sp.get('genre')        ?? '',
+    yearFrom:    sp.get('year_from')    ?? '',
+    yearTo:      sp.get('year_to')      ?? '',
+    releaseType: sp.get('release_type') ?? '',
+    label:       sp.get('label')        ?? '',
+  };
+}
+
+function buildUrl(q: string, f: Filters): string {
+  const p = new URLSearchParams();
+  if (q)           p.set('q',            q);
+  if (f.genre)     p.set('genre',        f.genre);
+  if (f.yearFrom)  p.set('year_from',    f.yearFrom);
+  if (f.yearTo)    p.set('year_to',      f.yearTo);
+  if (f.releaseType) p.set('release_type', f.releaseType);
+  if (f.label)     p.set('label',        f.label);
+  const qs = p.toString();
+  return qs ? `/?${qs}` : '/';
+}
+
+function activeCount(f: Filters): number {
+  return [f.genre, f.yearFrom, f.yearTo, f.releaseType, f.label].filter(Boolean).length;
+}
+
+// ── Shared input style ────────────────────────────────────────────────────────
 const ADV_INPUT = [
   'border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-900',
   'placeholder-gray-400 bg-white focus:outline-none focus:border-blue-400 w-full',
 ].join(' ');
+
+// ── Component ─────────────────────────────────────────────────────────────────
 
 export default function SearchPage() {
   const router       = useRouter();
@@ -30,12 +85,13 @@ export default function SearchPage() {
 
   // ── Core search state ──────────────────────────────────────────────────────
   const [query,     setQuery]     = useState(searchParams.get('q') ?? '');
+  const [filters,   setFilters]   = useState<Filters>(() => filtersFromParams(searchParams));
   const [tolerance, setTolerance] = useState(0);
   const [results,   setResults]   = useState<SearchResult | null>(null);
   const [loading,   setLoading]   = useState(false);
   const [error,     setError]     = useState<string | null>(null);
 
-  // ── Advanced-form state ────────────────────────────────────────────────────
+  // ── Advanced form state ────────────────────────────────────────────────────
   const [advExpanded, setAdvExpanded] = useState(false);
   const [advTitle,    setAdvTitle]    = useState('');
   const [advArtist,   setAdvArtist]   = useState('');
@@ -43,16 +99,23 @@ export default function SearchPage() {
   const [advExact,    setAdvExact]    = useState('');
   const [advFrom,     setAdvFrom]     = useState('');
   const [advTo,       setAdvTo]       = useState('');
+  // Advanced filter fields (mirror of `filters` for the form)
+  const [advGenre,    setAdvGenre]    = useState('');
+  const [advYearFrom, setAdvYearFrom] = useState('');
+  const [advYearTo,   setAdvYearTo]   = useState('');
+  const [advRelType,  setAdvRelType]  = useState('');
+  const [advLabel,    setAdvLabel]    = useState('');
 
   const abortRef = useRef<AbortController | null>(null);
 
   // ── Core fetch ─────────────────────────────────────────────────────────────
-  const doSearch = useCallback(async (q: string, tol: number) => {
-    if (!q.trim()) { setResults(null); setError(null); return; }
+  const doSearch = useCallback(async (q: string, tol: number, f: Filters) => {
+    const hasF = activeCount(f) > 0;
+    if (!q.trim() && !hasF) { setResults(null); setError(null); return; }
 
     abortRef.current?.abort();
-    const controller  = new AbortController();
-    abortRef.current  = controller;
+    const controller = new AbortController();
+    abortRef.current = controller;
 
     setLoading(true);
     setError(null);
@@ -62,10 +125,16 @@ export default function SearchPage() {
         ? `${process.env.NEXT_PUBLIC_WORKER_URL}/search`
         : '/api/search';
 
-      const params = new URLSearchParams({ q });
-      if (tol > 0) params.set('tolerance', String(tol));
+      const params = new URLSearchParams();
+      if (q.trim()) params.set('q', q.trim());
+      if (tol > 0)        params.set('tolerance',    String(tol));
+      if (f.genre)        params.set('genre',        f.genre);
+      if (f.yearFrom)     params.set('year_from',    f.yearFrom);
+      if (f.yearTo)       params.set('year_to',      f.yearTo);
+      if (f.releaseType)  params.set('release_type', f.releaseType);
+      if (f.label)        params.set('label',        f.label);
 
-      const res  = await fetch(`${base}?${params}`, { signal: controller.signal });
+      const res = await fetch(`${base}?${params}`, { signal: controller.signal });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data: SearchResult = await res.json();
       if (!controller.signal.aborted) setResults(data);
@@ -78,82 +147,106 @@ export default function SearchPage() {
     }
   }, []);
 
-  // ── Explicit submit (main search box) ──────────────────────────────────────
+  // ── Explicit submit (main box) ─────────────────────────────────────────────
   const handleSubmit = useCallback(() => {
     const q = query.trim();
-    if (!q) return;
+    if (!q && activeCount(filters) === 0) return;
     setTolerance(0);
-    doSearch(q, 0);
-    router.replace(`/?q=${encodeURIComponent(q)}`, { scroll: false });
-  }, [query, doSearch, router]);
+    doSearch(q, 0, filters);
+    router.replace(buildUrl(q, filters), { scroll: false });
+  }, [query, filters, doSearch, router]);
 
-  // ── Clicking an example chip searches immediately ──────────────────────────
+  // ── Example chip ──────────────────────────────────────────────────────────
   const handleExampleClick = useCallback((label: string) => {
     setQuery(label);
+    setFilters(EMPTY_FILTERS);
     setTolerance(0);
-    doSearch(label, 0);
+    doSearch(label, 0, EMPTY_FILTERS);
     router.replace(`/?q=${encodeURIComponent(label)}`, { scroll: false });
   }, [doSearch, router]);
 
-  // ── Clear: wipe query + results ────────────────────────────────────────────
+  // ── Clear ─────────────────────────────────────────────────────────────────
   const handleClear = useCallback(() => {
     setQuery('');
+    setFilters(EMPTY_FILTERS);
     setResults(null);
     setError(null);
     setTolerance(0);
     router.replace('/', { scroll: false });
   }, [router]);
 
-  // ── Tolerance slider (immediate — post-results filter) ─────────────────────
+  // ── Tolerance slider ──────────────────────────────────────────────────────
   const handleToleranceChange = (ms: number) => {
     setTolerance(ms);
-    doSearch(query, ms);
+    doSearch(query, ms, filters);
   };
 
-  // ── Advanced search compile + submit ───────────────────────────────────────
-  function compileAdvancedQuery(): string {
+  // ── Advanced form compile + submit ─────────────────────────────────────────
+  const compileAdvancedQuery = (): string => {
     const parts: string[] = [];
     const kw = [advTitle.trim(), advArtist.trim()].filter(Boolean).join(' ');
     if (kw) parts.push(kw);
-
     if (advDurMode === 'exact' && advExact.trim()) {
       parts.push(advExact.trim());
     } else if (advDurMode === 'range') {
       const from = advFrom.trim();
       const to   = advTo.trim();
       if (from && to) parts.push(`${from} to ${to}`);
-      else if (from)  parts.push(from); // single bound — treat as exact
+      else if (from)  parts.push(from);
     }
-
     return parts.join(' ');
-  }
+  };
 
   const handleAdvancedSubmit = useCallback(() => {
-    const compiled = compileAdvancedQuery();
-    if (!compiled) return;
+    const compiled  = compileAdvancedQuery();
+    const newFilters: Filters = {
+      genre:       advGenre,
+      yearFrom:    advYearFrom,
+      yearTo:      advYearTo,
+      releaseType: advRelType,
+      label:       advLabel,
+    };
+    if (!compiled && activeCount(newFilters) === 0) return;
     setQuery(compiled);
+    setFilters(newFilters);
     setTolerance(0);
-    doSearch(compiled, 0);
-    router.replace(`/?q=${encodeURIComponent(compiled)}`, { scroll: false });
+    doSearch(compiled, 0, newFilters);
+    router.replace(buildUrl(compiled, newFilters), { scroll: false });
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [advTitle, advArtist, advDurMode, advExact, advFrom, advTo, doSearch, router]);
+  }, [advTitle, advArtist, advDurMode, advExact, advFrom, advTo,
+      advGenre, advYearFrom, advYearTo, advRelType, advLabel,
+      doSearch, router]);
 
-  // ── Initial search from URL on first load ──────────────────────────────────
+  // Sync advanced filter fields from main filter state when advanced opens
   useEffect(() => {
-    const q = searchParams.get('q');
-    if (q) doSearch(q, 0);
+    if (advExpanded) {
+      setAdvGenre(filters.genre);
+      setAdvYearFrom(filters.yearFrom);
+      setAdvYearTo(filters.yearTo);
+      setAdvRelType(filters.releaseType);
+      setAdvLabel(filters.label);
+    }
+  }, [advExpanded]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Initial search from URL ────────────────────────────────────────────────
+  useEffect(() => {
+    const q = searchParams.get('q') ?? '';
+    const f = filtersFromParams(searchParams);
+    if (q || activeCount(f) > 0) doSearch(q, 0, f);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const hasQuery    = !!query.trim();
-  const hasResults  = results !== null || loading;
-  const parsed      = parseQuery(query);
+  const hasQuery   = !!query.trim();
+  const hasFilters = activeCount(filters) > 0;
+  const hasResults = results !== null || loading;
+  const parsed     = parseQuery(query);
   const isExactTime = parsed.exactDuration != null && !parsed.keywords;
+  const numActive   = activeCount(filters);
 
   return (
     <div className="min-h-screen bg-white flex flex-col">
       <header className={`flex flex-col items-center transition-all duration-200 ${
-        hasQuery ? 'pt-5 pb-3' : 'pt-20 sm:pt-28 pb-8'
+        hasQuery || hasFilters ? 'pt-5 pb-3' : 'pt-20 sm:pt-28 pb-8'
       }`}>
         <a
           href="/"
@@ -161,20 +254,20 @@ export default function SearchPage() {
           className="no-underline"
         >
           <h1 className={`font-bold text-gray-900 tracking-tight transition-all duration-200 select-none ${
-            hasQuery ? 'text-xl mb-3' : 'text-3xl sm:text-5xl mb-4'
+            hasQuery || hasFilters ? 'text-xl mb-3' : 'text-3xl sm:text-5xl mb-4'
           }`}>
             <span className="text-blue-600">HowLong</span>IsThisSong
             <span className="text-gray-300">.com</span>
           </h1>
         </a>
 
-        {!hasQuery && (
+        {!hasQuery && !hasFilters && (
           <p className="text-gray-400 text-sm sm:text-base mb-6 text-center px-4">
             The internet&rsquo;s searchable song-duration database.
           </p>
         )}
 
-        <div className={`w-full px-4 transition-all duration-200 ${hasQuery ? 'max-w-2xl' : 'max-w-xl'}`}>
+        <div className={`w-full px-4 transition-all duration-200 ${hasQuery || hasFilters ? 'max-w-2xl' : 'max-w-xl'}`}>
           {/* Main search bar */}
           <SearchBar
             value={query}
@@ -184,11 +277,11 @@ export default function SearchPage() {
             loading={loading}
           />
 
-          {/* Advanced search */}
+          {/* Advanced search toggle */}
           <div className="mt-2">
             <button
               onClick={() => setAdvExpanded(e => !e)}
-              className="flex items-center gap-1 text-xs text-gray-400 hover:text-blue-500 transition-colors pl-1 select-none"
+              className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-blue-500 transition-colors pl-1 select-none"
             >
               <svg
                 className={`h-3 w-3 transition-transform duration-150 ${advExpanded ? 'rotate-180' : ''}`}
@@ -197,6 +290,11 @@ export default function SearchPage() {
                 <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
               </svg>
               Advanced search
+              {numActive > 0 && (
+                <span className="ml-0.5 bg-blue-100 text-blue-600 text-xs font-semibold px-1.5 py-0.5 rounded-full">
+                  {numActive}
+                </span>
+              )}
             </button>
 
             {advExpanded && (
@@ -206,97 +304,181 @@ export default function SearchPage() {
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <label className="text-xs font-medium text-gray-500 mb-1 block">Title</label>
-                    <input
-                      value={advTitle}
-                      onChange={e => setAdvTitle(e.target.value)}
+                    <input value={advTitle} onChange={e => setAdvTitle(e.target.value)}
                       onKeyDown={e => { if (e.key === 'Enter') handleAdvancedSubmit(); }}
-                      placeholder="Bohemian Rhapsody"
-                      className={ADV_INPUT}
-                    />
+                      placeholder="Bohemian Rhapsody" className={ADV_INPUT} />
                   </div>
                   <div>
                     <label className="text-xs font-medium text-gray-500 mb-1 block">Artist</label>
-                    <input
-                      value={advArtist}
-                      onChange={e => setAdvArtist(e.target.value)}
+                    <input value={advArtist} onChange={e => setAdvArtist(e.target.value)}
                       onKeyDown={e => { if (e.key === 'Enter') handleAdvancedSubmit(); }}
-                      placeholder="Queen"
-                      className={ADV_INPUT}
-                    />
+                      placeholder="Queen" className={ADV_INPUT} />
                   </div>
+                </div>
+
+                {/* Genre + Label */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs font-medium text-gray-500 mb-1 block">Genre</label>
+                    <input value={advGenre} onChange={e => setAdvGenre(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter') handleAdvancedSubmit(); }}
+                      placeholder="rock, jazz, hip-hop…" className={ADV_INPUT} />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-gray-500 mb-1 block">Label</label>
+                    <input value={advLabel} onChange={e => setAdvLabel(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter') handleAdvancedSubmit(); }}
+                      placeholder="Warner, Columbia…" className={ADV_INPUT} />
+                  </div>
+                </div>
+
+                {/* Year range */}
+                <div>
+                  <label className="text-xs font-medium text-gray-500 mb-2 block">Year</label>
+                  {/* Decade shortcuts */}
+                  <div className="flex flex-wrap gap-1 mb-2">
+                    {DECADES.map(d => {
+                      const active = advYearFrom === d.from && advYearTo === d.to;
+                      return (
+                        <button
+                          key={d.label}
+                          onClick={() => {
+                            if (active) { setAdvYearFrom(''); setAdvYearTo(''); }
+                            else        { setAdvYearFrom(d.from); setAdvYearTo(d.to); }
+                          }}
+                          className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${
+                            active
+                              ? 'bg-blue-600 text-white border-blue-600'
+                              : 'bg-white text-gray-500 border-gray-200 hover:border-blue-300 hover:text-blue-600'
+                          }`}
+                        >
+                          {d.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <input value={advYearFrom} onChange={e => setAdvYearFrom(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter') handleAdvancedSubmit(); }}
+                      placeholder="From" className={`${ADV_INPUT} w-24`} maxLength={4} />
+                    <span className="text-xs text-gray-400 flex-shrink-0">to</span>
+                    <input value={advYearTo} onChange={e => setAdvYearTo(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter') handleAdvancedSubmit(); }}
+                      placeholder="To" className={`${ADV_INPUT} w-24`} maxLength={4} />
+                  </div>
+                </div>
+
+                {/* Release type */}
+                <div>
+                  <label className="text-xs font-medium text-gray-500 mb-1 block">Release type</label>
+                  <select
+                    value={advRelType}
+                    onChange={e => setAdvRelType(e.target.value)}
+                    className={`${ADV_INPUT} w-auto pr-8 cursor-pointer`}
+                  >
+                    {RELEASE_TYPES.map(rt => (
+                      <option key={rt} value={rt}>{RELEASE_TYPE_LABELS[rt]}</option>
+                    ))}
+                  </select>
                 </div>
 
                 {/* Duration */}
                 <div>
                   <label className="text-xs font-medium text-gray-500 mb-2 block">Duration</label>
-
-                  {/* Exact / Range toggle */}
                   <div className="flex rounded-lg border border-gray-200 w-fit mb-3 text-xs overflow-hidden">
                     {(['exact', 'range'] as const).map(mode => (
-                      <button
-                        key={mode}
-                        onClick={() => setAdvDurMode(mode)}
+                      <button key={mode} onClick={() => setAdvDurMode(mode)}
                         className={`px-3 py-1.5 capitalize transition-colors ${
                           advDurMode === mode
                             ? 'bg-blue-600 text-white font-medium'
                             : 'bg-white text-gray-500 hover:bg-gray-100'
                         }`}
-                      >
-                        {mode}
-                      </button>
+                      >{mode}</button>
                     ))}
                   </div>
-
                   {advDurMode === 'exact' ? (
-                    <input
-                      value={advExact}
-                      onChange={e => setAdvExact(e.target.value)}
+                    <input value={advExact} onChange={e => setAdvExact(e.target.value)}
                       onKeyDown={e => { if (e.key === 'Enter') handleAdvancedSubmit(); }}
-                      placeholder="3:16"
-                      className={`${ADV_INPUT} w-28 font-mono`}
-                    />
+                      placeholder="3:16 or 3:16.423"
+                      className={`${ADV_INPUT} w-36 font-mono`} />
                   ) : (
                     <div className="flex items-center gap-2">
-                      <input
-                        value={advFrom}
-                        onChange={e => setAdvFrom(e.target.value)}
+                      <input value={advFrom} onChange={e => setAdvFrom(e.target.value)}
                         onKeyDown={e => { if (e.key === 'Enter') handleAdvancedSubmit(); }}
-                        placeholder="3:00"
-                        className={`${ADV_INPUT} w-24 font-mono`}
-                      />
+                        placeholder="3:00" className={`${ADV_INPUT} w-28 font-mono`} />
                       <span className="text-xs text-gray-400 flex-shrink-0">to</span>
-                      <input
-                        value={advTo}
-                        onChange={e => setAdvTo(e.target.value)}
+                      <input value={advTo} onChange={e => setAdvTo(e.target.value)}
                         onKeyDown={e => { if (e.key === 'Enter') handleAdvancedSubmit(); }}
-                        placeholder="4:00"
-                        className={`${ADV_INPUT} w-24 font-mono`}
-                      />
+                        placeholder="4:00" className={`${ADV_INPUT} w-28 font-mono`} />
                     </div>
                   )}
                 </div>
 
-                <button
-                  onClick={handleAdvancedSubmit}
-                  className="px-5 py-2 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white text-sm font-semibold rounded-lg transition-colors"
-                >
-                  Search
-                </button>
+                {/* Actions */}
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={handleAdvancedSubmit}
+                    className="px-5 py-2 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white text-sm font-semibold rounded-lg transition-colors"
+                  >
+                    Search
+                  </button>
+                  {(advGenre || advYearFrom || advYearTo || advRelType || advLabel) && (
+                    <button
+                      onClick={() => {
+                        setAdvGenre(''); setAdvYearFrom(''); setAdvYearTo('');
+                        setAdvRelType(''); setAdvLabel('');
+                      }}
+                      className="text-xs text-gray-400 hover:text-red-500 transition-colors"
+                    >
+                      Clear filters
+                    </button>
+                  )}
+                </div>
               </div>
             )}
           </div>
         </div>
 
-        {/* Example chips — only shown on homepage */}
-        {!hasQuery && (
+        {/* Active filter chips (shown collapsed too) */}
+        {numActive > 0 && !advExpanded && (
+          <div className="flex flex-wrap gap-1.5 mt-2 px-4 max-w-2xl w-full">
+            {filters.genre && (
+              <span className="text-xs bg-blue-50 text-blue-700 border border-blue-200 px-2 py-0.5 rounded-full">
+                genre: {filters.genre}
+              </span>
+            )}
+            {(filters.yearFrom || filters.yearTo) && (
+              <span className="text-xs bg-blue-50 text-blue-700 border border-blue-200 px-2 py-0.5 rounded-full">
+                {filters.yearFrom && filters.yearTo
+                  ? `${filters.yearFrom}–${filters.yearTo}`
+                  : filters.yearFrom ? `from ${filters.yearFrom}` : `to ${filters.yearTo}`}
+              </span>
+            )}
+            {filters.releaseType && (
+              <span className="text-xs bg-blue-50 text-blue-700 border border-blue-200 px-2 py-0.5 rounded-full">
+                {filters.releaseType}
+              </span>
+            )}
+            {filters.label && (
+              <span className="text-xs bg-blue-50 text-blue-700 border border-blue-200 px-2 py-0.5 rounded-full">
+                label: {filters.label}
+              </span>
+            )}
+            <button
+              onClick={() => { setFilters(EMPTY_FILTERS); if (query.trim()) doSearch(query, 0, EMPTY_FILTERS); else handleClear(); }}
+              className="text-xs text-gray-400 hover:text-red-500 transition-colors px-1"
+            >
+              ✕ clear all
+            </button>
+          </div>
+        )}
+
+        {/* Example chips — only on homepage */}
+        {!hasQuery && !hasFilters && (
           <div className="flex flex-wrap gap-2 mt-4 px-4 justify-center max-w-xl">
             {EXAMPLES.map((ex) => (
-              <button
-                key={ex.label}
-                onClick={() => handleExampleClick(ex.label)}
-                title={ex.hint}
-                className="text-xs bg-gray-100 hover:bg-blue-50 hover:text-blue-700 text-gray-500 px-3 py-1.5 rounded-full transition-colors font-mono"
-              >
+              <button key={ex.label} onClick={() => handleExampleClick(ex.label)} title={ex.hint}
+                className="text-xs bg-gray-100 hover:bg-blue-50 hover:text-blue-700 text-gray-500 px-3 py-1.5 rounded-full transition-colors font-mono">
                 {ex.label}
               </button>
             ))}
@@ -309,10 +491,10 @@ export default function SearchPage() {
           <p className="text-red-500 text-sm text-center mt-8 bg-red-50 py-3 px-4 rounded-lg">{error}</p>
         )}
 
-        {/* Hint when user has typed but hasn't searched yet */}
-        {hasQuery && !hasResults && !error && (
+        {(hasQuery || hasFilters) && !hasResults && !error && (
           <p className="text-center text-sm text-gray-400 mt-10">
-            Press <kbd className="px-1.5 py-0.5 text-xs font-mono bg-gray-100 border border-gray-200 rounded">Enter</kbd> or click <strong className="font-medium text-gray-500">Search</strong> to find songs.
+            Press <kbd className="px-1.5 py-0.5 text-xs font-mono bg-gray-100 border border-gray-200 rounded">Enter</kbd>{' '}
+            or click <strong className="font-medium text-gray-500">Search</strong> to find songs.
           </p>
         )}
 
@@ -327,7 +509,7 @@ export default function SearchPage() {
           />
         )}
 
-        {!hasQuery && !hasResults && (
+        {!hasQuery && !hasFilters && !hasResults && (
           <div className="mt-16 text-center text-sm text-gray-300">
             <p>Search by exact time, range, title, artist, or any combination.</p>
           </div>
@@ -336,15 +518,9 @@ export default function SearchPage() {
 
       <footer className="text-center text-xs text-gray-300 py-4 border-t border-gray-100">
         Data from{' '}
-        <a
-          href="https://musicbrainz.org"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="underline hover:text-gray-500 transition-colors"
-        >
-          MusicBrainz
-        </a>{' '}
-        and other public sources.
+        <a href="https://musicbrainz.org" target="_blank" rel="noopener noreferrer"
+          className="underline hover:text-gray-500 transition-colors">MusicBrainz
+        </a>{' '}and other public sources.
       </footer>
     </div>
   );

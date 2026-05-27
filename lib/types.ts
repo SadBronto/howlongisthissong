@@ -25,5 +25,10 @@ export interface SearchResult {
     exactDuration?: number;
     minDuration?: number;
     maxDuration?: number;
+    genre?: string;
+    yearFrom?: number;
+    yearTo?: number;
+    releaseType?: string;
+    label?: string;
   };
 }
