@@ -192,6 +192,16 @@ function buildFilterClauses(
   };
 }
 
+/** Build the ORDER BY clause based on sort mode and whether FTS join is used. */
+function buildOrderBy(sort: string, fts: boolean): string {
+  const p = fts ? 't.' : '';
+  if (sort === 'asc')  return `ORDER BY ${p}duration_ms ASC`;
+  if (sort === 'desc') return `ORDER BY ${p}duration_ms DESC`;
+  return fts
+    ? 'ORDER BY COALESCE(t.popularity, -2) DESC, tracks_fts.rank'
+    : 'ORDER BY COALESCE(popularity, -2) DESC, duration_ms';
+}
+
 /** Build the duration WHERE fragment (handles open-ended ranges). */
 function buildDurationClause(
   alias:       string,
@@ -235,13 +245,24 @@ export default {
     const filters: Filters = { genre, yearFrom, yearTo, releaseType, label };
     const hasFilters = !!(genre || yearFrom != null || yearTo != null || releaseType || label);
 
+    // ── Pagination + sort ─────────────────────────────────────────────────────
+    const page    = Math.max(1, Math.min(500, parseInt(url.searchParams.get('page')     ?? '1',  10) || 1));
+    const perPage = Math.max(1, Math.min(200, parseInt(url.searchParams.get('per_page') ?? '50', 10) || 50));
+    const sortRaw = url.searchParams.get('sort') ?? 'relevance';
+    const sort    = ['relevance', 'asc', 'desc'].includes(sortRaw) ? sortRaw : 'relevance';
+    const offset  = (page - 1) * perPage;
+
     if (url.pathname !== '/search') return json({ error: 'Not found' }, 404);
 
     const parsed = parseQuery(q);
 
+    // Sanitize FTS upfront — catches *, spaces, and special-char-only inputs
+    const effectiveFts = parsed.keywords ? sanitizeForFts(parsed.keywords) : '';
+    const hasKeywords  = !!effectiveFts;
+
     // Bail early only if there's truly nothing to search on
-    if (!parsed.keywords && parsed.exactDuration == null && parsed.minDuration == null && parsed.maxDuration == null && !hasFilters) {
-      return json({ tracks: [], total: 0 });
+    if (!hasKeywords && parsed.exactDuration == null && parsed.minDuration == null && parsed.maxDuration == null && !hasFilters) {
+      return json({ tracks: [], total: 0, page, perPage, hasMore: false });
     }
 
     // ── Resolve duration bounds ───────────────────────────────────────────────
@@ -262,68 +283,93 @@ export default {
     }
 
     const hasDuration = minDuration != null || maxDuration != null;
-    const hasKeywords = !!parsed.keywords;
 
     try {
-      let stmt: D1PreparedStatement;
-
       const fts = buildFilterClauses(filters, 't');
       const dir = buildFilterClauses(filters, '');
+      const ob  = buildOrderBy(sort, false);
+      const obF = buildOrderBy(sort, true);
+
+      let dataStmt:  D1PreparedStatement;
+      let countStmt: D1PreparedStatement;
 
       if (hasKeywords && hasDuration) {
-        const ftsQuery = sanitizeForFts(parsed.keywords!);
         const dur = buildDurationClause('t', minDuration, maxDuration);
-        stmt = env.DB.prepare(`
+        dataStmt = env.DB.prepare(`
           SELECT ${JOINED_COLS}
-          FROM tracks_fts
-          JOIN tracks t ON t.id = tracks_fts.rowid
-          WHERE tracks_fts MATCH ?
-            AND ${dur.sql}${fts.sql}
-          ORDER BY COALESCE(t.popularity, -2) DESC, tracks_fts.rank
-          LIMIT 100
-        `).bind(ftsQuery, ...dur.params, ...fts.params);
+          FROM tracks_fts JOIN tracks t ON t.id = tracks_fts.rowid
+          WHERE tracks_fts MATCH ? AND ${dur.sql}${fts.sql}
+          ${obF} LIMIT ${perPage + 1} OFFSET ${offset}
+        `).bind(effectiveFts, ...dur.params, ...fts.params);
+        countStmt = env.DB.prepare(`
+          SELECT COUNT(*) as n FROM (
+            SELECT 1 FROM tracks_fts JOIN tracks t ON t.id = tracks_fts.rowid
+            WHERE tracks_fts MATCH ? AND ${dur.sql}${fts.sql} LIMIT 10001
+          )
+        `).bind(effectiveFts, ...dur.params, ...fts.params);
 
       } else if (hasKeywords) {
-        const ftsQuery = sanitizeForFts(parsed.keywords!);
-        stmt = env.DB.prepare(`
+        dataStmt = env.DB.prepare(`
           SELECT ${JOINED_COLS}
-          FROM tracks_fts
-          JOIN tracks t ON t.id = tracks_fts.rowid
+          FROM tracks_fts JOIN tracks t ON t.id = tracks_fts.rowid
           WHERE tracks_fts MATCH ?${fts.sql}
-          ORDER BY COALESCE(t.popularity, -2) DESC, tracks_fts.rank
-          LIMIT 100
-        `).bind(ftsQuery, ...fts.params);
+          ${obF} LIMIT ${perPage + 1} OFFSET ${offset}
+        `).bind(effectiveFts, ...fts.params);
+        countStmt = env.DB.prepare(`
+          SELECT COUNT(*) as n FROM (
+            SELECT 1 FROM tracks_fts JOIN tracks t ON t.id = tracks_fts.rowid
+            WHERE tracks_fts MATCH ?${fts.sql} LIMIT 10001
+          )
+        `).bind(effectiveFts, ...fts.params);
 
       } else if (hasDuration) {
         const dur = buildDurationClause('', minDuration, maxDuration);
-        stmt = env.DB.prepare(`
-          SELECT ${DIRECT_COLS}
-          FROM tracks
+        dataStmt = env.DB.prepare(`
+          SELECT ${DIRECT_COLS} FROM tracks
           WHERE ${dur.sql}${dir.sql}
-          ORDER BY COALESCE(popularity, -2) DESC, duration_ms
-          LIMIT 100
+          ${ob} LIMIT ${perPage + 1} OFFSET ${offset}
+        `).bind(...dur.params, ...dir.params);
+        countStmt = env.DB.prepare(`
+          SELECT COUNT(*) as n FROM (
+            SELECT 1 FROM tracks WHERE ${dur.sql}${dir.sql} LIMIT 10001
+          )
         `).bind(...dur.params, ...dir.params);
 
       } else {
-        // Filters only — no keywords, no duration
-        stmt = env.DB.prepare(`
-          SELECT ${DIRECT_COLS}
-          FROM tracks
+        dataStmt = env.DB.prepare(`
+          SELECT ${DIRECT_COLS} FROM tracks
           WHERE 1=1${dir.sql}
-          ORDER BY COALESCE(popularity, -2) DESC
-          LIMIT 100
+          ${ob} LIMIT ${perPage + 1} OFFSET ${offset}
+        `).bind(...dir.params);
+        countStmt = env.DB.prepare(`
+          SELECT COUNT(*) as n FROM (
+            SELECT 1 FROM tracks WHERE 1=1${dir.sql} LIMIT 10001
+          )
         `).bind(...dir.params);
       }
 
-      const result = await stmt.all();
-      const tracks = (result.results ?? []) as TrackRow[];
+      // Run data + count queries in parallel
+      const [result, countResult] = await Promise.all([
+        dataStmt.all(),
+        countStmt.first<{ n: number }>(),
+      ]);
 
-      // ── Spotify enrichment for keyword or filter searches ─────────────────
+      const allRows     = (result.results ?? []) as TrackRow[];
+      const hasMore     = allRows.length > perPage;
+      const tracks      = allRows.slice(0, perPage);
+      const rawCount    = countResult?.n ?? (hasMore ? perPage + 1 : tracks.length);
+      const totalCapped = rawCount > 10000;
+      const total       = Math.min(rawCount, 10000);
+
+      // ── Spotify enrichment: score first 8 unenriched tracks inline ───────
       if ((hasKeywords || hasFilters) && tracks.length > 0 && env.SPOTIFY_CLIENT_ID) {
         const token = await withTimeout(getSpotifyToken(env), 800);
         if (token) {
-          await withTimeout(enrichWithSpotify(tracks, token, env, 4, 0), 700);
-          tracks.sort((a, b) => (b.popularity ?? -2) - (a.popularity ?? -2));
+          const inline = tracks.filter(t => t.isrc && t.popularity == null).slice(0, 8);
+          await withTimeout(enrichWithSpotify(inline, token, env, 4, 0), 700);
+          if (sort === 'relevance') {
+            tracks.sort((a, b) => (b.popularity ?? -2) - (a.popularity ?? -2));
+          }
         }
       }
 
@@ -332,7 +378,11 @@ export default {
 
       return json({
         tracks,
-        total: tracks.length,
+        total,
+        totalCapped,
+        page,
+        perPage,
+        hasMore,
         parsed: {
           keywords:      parsed.keywords,
           exactDuration: parsed.exactDuration,
@@ -371,7 +421,7 @@ export default {
       SELECT mb_id, isrc, popularity, genre
       FROM tracks
       WHERE isrc IS NOT NULL AND popularity IS NULL
-      LIMIT 500
+      LIMIT 1000
     `).all();
 
     const tracks = (result.results ?? []) as TrackRow[];
@@ -381,7 +431,7 @@ export default {
     }
 
     console.log(`Cron: enriching ${tracks.length} tracks`);
-    await enrichWithSpotify(tracks, token, env, 4, 2000);
+    await enrichWithSpotify(tracks, token, env, 4, 1000);
     console.log('Cron: done');
   },
 };

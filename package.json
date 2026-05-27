@@ -11,7 +11,8 @@
     "import-mb": "tsx scripts/import-musicbrainz.ts",
     "import-d1": "tsx scripts/import-d1.ts",
     "delete-non-isrc": "tsx scripts/delete-non-isrc.ts",
-    "enrich-d1": "tsx scripts/enrich-d1.ts"
+    "enrich-d1": "tsx scripts/enrich-d1.ts",
+    "rebuild-fts": "tsx scripts/rebuild-fts.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.4",

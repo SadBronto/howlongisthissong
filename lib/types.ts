@@ -18,8 +18,12 @@ export interface Track {
 }
 
 export interface SearchResult {
-  tracks: Track[];
-  total: number;
+  tracks:       Track[];
+  total:        number;
+  totalCapped?: boolean;  // true if there are >10,000 matching results
+  page:         number;
+  perPage:      number;
+  hasMore:      boolean;
   parsed?: {
     keywords?: string;
     exactDuration?: number;

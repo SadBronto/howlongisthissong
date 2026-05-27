@@ -55,14 +55,17 @@ function filtersFromParams(sp: URLSearchParams): Filters {
   };
 }
 
-function buildUrl(q: string, f: Filters): string {
+function buildUrl(q: string, f: Filters, pg: number, pp: number, s: string): string {
   const p = new URLSearchParams();
-  if (q)           p.set('q',            q);
-  if (f.genre)     p.set('genre',        f.genre);
-  if (f.yearFrom)  p.set('year_from',    f.yearFrom);
-  if (f.yearTo)    p.set('year_to',      f.yearTo);
+  if (q)             p.set('q',            q);
+  if (f.genre)       p.set('genre',        f.genre);
+  if (f.yearFrom)    p.set('year_from',    f.yearFrom);
+  if (f.yearTo)      p.set('year_to',      f.yearTo);
   if (f.releaseType) p.set('release_type', f.releaseType);
-  if (f.label)     p.set('label',        f.label);
+  if (f.label)       p.set('label',        f.label);
+  if (pg > 1)        p.set('page',         String(pg));
+  if (pp !== 50)     p.set('per_page',     String(pp));
+  if (s !== 'relevance') p.set('sort',     s);
   const qs = p.toString();
   return qs ? `/?${qs}` : '/';
 }
@@ -99,6 +102,19 @@ export default function SearchPage() {
   const [loading,   setLoading]   = useState(false);
   const [error,     setError]     = useState<string | null>(null);
 
+  // ── Pagination + sort state ────────────────────────────────────────────────
+  const [page, setPage] = useState(() =>
+    Math.max(1, parseInt(searchParams.get('page') ?? '1', 10) || 1)
+  );
+  const [perPage, setPerPage] = useState(() => {
+    const v = parseInt(searchParams.get('per_page') ?? '50', 10) || 50;
+    return [25, 50, 100, 200].includes(v) ? v : 50;
+  });
+  const [sort, setSort] = useState(() => {
+    const s = searchParams.get('sort') ?? 'relevance';
+    return ['relevance', 'asc', 'desc'].includes(s) ? s : 'relevance';
+  });
+
   // ── Advanced form state ────────────────────────────────────────────────────
   const [advExpanded, setAdvExpanded] = useState(false);
   const [advTitle,    setAdvTitle]    = useState('');
@@ -107,7 +123,6 @@ export default function SearchPage() {
   const [advExact,    setAdvExact]    = useState('');
   const [advFrom,     setAdvFrom]     = useState('');
   const [advTo,       setAdvTo]       = useState('');
-  // Advanced filter fields (mirror of `filters` for the form)
   const [advGenre,    setAdvGenre]    = useState('');
   const [advYearFrom, setAdvYearFrom] = useState('');
   const [advYearTo,   setAdvYearTo]   = useState('');
@@ -117,7 +132,10 @@ export default function SearchPage() {
   const abortRef = useRef<AbortController | null>(null);
 
   // ── Core fetch ─────────────────────────────────────────────────────────────
-  const doSearch = useCallback(async (q: string, tol: number, f: Filters) => {
+  const doSearch = useCallback(async (
+    q: string, tol: number, f: Filters,
+    pg = 1, pp = 50, s = 'relevance',
+  ) => {
     const hasF = activeCount(f) > 0;
     if (!q.trim() && !hasF) { setResults(null); setError(null); return; }
 
@@ -134,13 +152,16 @@ export default function SearchPage() {
         : '/api/search';
 
       const params = new URLSearchParams();
-      if (q.trim()) params.set('q', q.trim());
-      if (tol > 0)        params.set('tolerance',    String(tol));
-      if (f.genre)        params.set('genre',        f.genre);
-      if (f.yearFrom)     params.set('year_from',    f.yearFrom);
-      if (f.yearTo)       params.set('year_to',      f.yearTo);
-      if (f.releaseType)  params.set('release_type', f.releaseType);
-      if (f.label)        params.set('label',        f.label);
+      if (q.trim())       params.set('q',            q.trim());
+      if (tol > 0)        params.set('tolerance',     String(tol));
+      if (f.genre)        params.set('genre',         f.genre);
+      if (f.yearFrom)     params.set('year_from',     f.yearFrom);
+      if (f.yearTo)       params.set('year_to',       f.yearTo);
+      if (f.releaseType)  params.set('release_type',  f.releaseType);
+      if (f.label)        params.set('label',         f.label);
+      params.set('page',     String(pg));
+      params.set('per_page', String(pp));
+      if (s !== 'relevance') params.set('sort', s);
 
       const res = await fetch(`${base}?${params}`, { signal: controller.signal });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -160,18 +181,20 @@ export default function SearchPage() {
     const q = query.trim();
     if (!q && activeCount(filters) === 0) return;
     setTolerance(0);
-    doSearch(q, 0, filters);
-    router.replace(buildUrl(q, filters), { scroll: false });
-  }, [query, filters, doSearch, router]);
+    setPage(1);
+    doSearch(q, 0, filters, 1, perPage, sort);
+    router.replace(buildUrl(q, filters, 1, perPage, sort), { scroll: false });
+  }, [query, filters, perPage, sort, doSearch, router]);
 
   // ── Example chip ──────────────────────────────────────────────────────────
   const handleExampleClick = useCallback((label: string) => {
     setQuery(label);
     setFilters(EMPTY_FILTERS);
     setTolerance(0);
-    doSearch(label, 0, EMPTY_FILTERS);
+    setPage(1);
+    doSearch(label, 0, EMPTY_FILTERS, 1, perPage, sort);
     router.replace(`/?q=${encodeURIComponent(label)}`, { scroll: false });
-  }, [doSearch, router]);
+  }, [perPage, sort, doSearch, router]);
 
   // ── Clear ─────────────────────────────────────────────────────────────────
   const handleClear = useCallback(() => {
@@ -180,14 +203,38 @@ export default function SearchPage() {
     setResults(null);
     setError(null);
     setTolerance(0);
+    setPage(1);
     router.replace('/', { scroll: false });
   }, [router]);
 
   // ── Tolerance slider ──────────────────────────────────────────────────────
   const handleToleranceChange = (ms: number) => {
     setTolerance(ms);
-    doSearch(query, ms, filters);
+    setPage(1);
+    doSearch(query, ms, filters, 1, perPage, sort);
   };
+
+  // ── Pagination + sort handlers ─────────────────────────────────────────────
+  const handlePageChange = useCallback((pg: number) => {
+    setPage(pg);
+    doSearch(query, tolerance, filters, pg, perPage, sort);
+    router.replace(buildUrl(query, filters, pg, perPage, sort), { scroll: false });
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }, [query, tolerance, filters, perPage, sort, doSearch, router]);
+
+  const handlePerPageChange = useCallback((pp: number) => {
+    setPerPage(pp);
+    setPage(1);
+    doSearch(query, tolerance, filters, 1, pp, sort);
+    router.replace(buildUrl(query, filters, 1, pp, sort), { scroll: false });
+  }, [query, tolerance, filters, sort, doSearch, router]);
+
+  const handleSortChange = useCallback((s: string) => {
+    setSort(s);
+    setPage(1);
+    doSearch(query, tolerance, filters, 1, perPage, s);
+    router.replace(buildUrl(query, filters, 1, perPage, s), { scroll: false });
+  }, [query, tolerance, filters, perPage, doSearch, router]);
 
   // ── Advanced form compile + submit ─────────────────────────────────────────
   const compileAdvancedQuery = (): string => {
@@ -207,7 +254,7 @@ export default function SearchPage() {
   };
 
   const handleAdvancedSubmit = useCallback(() => {
-    const compiled  = compileAdvancedQuery();
+    const compiled   = compileAdvancedQuery();
     const newFilters: Filters = {
       genre:       advGenre,
       yearFrom:    advYearFrom,
@@ -219,12 +266,13 @@ export default function SearchPage() {
     setQuery(compiled);
     setFilters(newFilters);
     setTolerance(0);
-    doSearch(compiled, 0, newFilters);
-    router.replace(buildUrl(compiled, newFilters), { scroll: false });
+    setPage(1);
+    doSearch(compiled, 0, newFilters, 1, perPage, sort);
+    router.replace(buildUrl(compiled, newFilters, 1, perPage, sort), { scroll: false });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [advTitle, advArtist, advDurMode, advExact, advFrom, advTo,
       advGenre, advYearFrom, advYearTo, advRelType, advLabel,
-      doSearch, router]);
+      perPage, sort, doSearch, router]);
 
   // Sync advanced filter fields from main filter state when advanced opens
   useEffect(() => {
@@ -239,16 +287,25 @@ export default function SearchPage() {
 
   // ── Initial search from URL ────────────────────────────────────────────────
   useEffect(() => {
-    const q = searchParams.get('q') ?? '';
-    const f = filtersFromParams(searchParams);
-    if (q || activeCount(f) > 0) doSearch(q, 0, f);
+    const q  = searchParams.get('q') ?? '';
+    const f  = filtersFromParams(searchParams);
+    const pg = Math.max(1, parseInt(searchParams.get('page') ?? '1', 10) || 1);
+    const pp = (() => {
+      const v = parseInt(searchParams.get('per_page') ?? '50', 10) || 50;
+      return [25, 50, 100, 200].includes(v) ? v : 50;
+    })();
+    const s = (() => {
+      const sv = searchParams.get('sort') ?? 'relevance';
+      return ['relevance', 'asc', 'desc'].includes(sv) ? sv : 'relevance';
+    })();
+    if (q || activeCount(f) > 0) doSearch(q, 0, f, pg, pp, s);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const hasQuery   = !!query.trim();
-  const hasFilters = activeCount(filters) > 0;
-  const hasResults = results !== null || loading;
-  const parsed     = parseQuery(query);
+  const hasQuery    = !!query.trim();
+  const hasFilters  = activeCount(filters) > 0;
+  const hasResults  = results !== null || loading;
+  const parsed      = parseQuery(query);
   const isExactTime = parsed.exactDuration != null && !parsed.keywords;
   const numActive   = activeCount(filters);
 
@@ -344,7 +401,6 @@ export default function SearchPage() {
                 {/* Year range */}
                 <div>
                   <label className="text-xs font-medium text-gray-500 mb-2 block">Year</label>
-                  {/* Decade shortcuts */}
                   <div className="flex flex-wrap gap-1 mb-2">
                     {DECADES.map(d => {
                       const active = advYearFrom === d.from && advYearTo === d.to;
@@ -474,7 +530,12 @@ export default function SearchPage() {
               </span>
             )}
             <button
-              onClick={() => { setFilters(EMPTY_FILTERS); if (query.trim()) doSearch(query, 0, EMPTY_FILTERS); else handleClear(); }}
+              onClick={() => {
+                setFilters(EMPTY_FILTERS);
+                setPage(1);
+                if (query.trim()) doSearch(query, 0, EMPTY_FILTERS, 1, perPage, sort);
+                else handleClear();
+              }}
               className="text-xs text-gray-400 hover:text-red-500 transition-colors px-1"
             >
               ✕ clear all
@@ -515,6 +576,12 @@ export default function SearchPage() {
             tolerance={tolerance}
             isExactTime={isExactTime}
             onToleranceChange={handleToleranceChange}
+            page={page}
+            perPage={perPage}
+            sort={sort}
+            onPageChange={handlePageChange}
+            onPerPageChange={handlePerPageChange}
+            onSortChange={handleSortChange}
           />
         )}
 

@@ -548,9 +548,32 @@ async function main() {
     console.log(`  Note: could not delete temp file — remove ${TMP_FILE} manually`);
   }
 
-  // ── Rebuild FTS index ─────────────────────────────────────────────────────────
-  console.log('Rebuilding FTS index (may take a couple of minutes)…');
-  await d1Raw("INSERT INTO tracks_fts(tracks_fts) VALUES('rebuild')");
+  // ── Rebuild FTS index in batches ─────────────────────────────────────────────
+  // The single 'rebuild' command times out on 5.7M rows, so we drop+recreate
+  // and repopulate in chunks of 10,000 rows. Keyword searches degrade gracefully
+  // as the table refills (title/artist matches return as soon as their batch lands).
+  console.log('Rebuilding FTS index in batches of 10,000…');
+  await d1Raw('DROP TRIGGER IF EXISTS tracks_au');
+  await d1Raw('DROP TABLE IF EXISTS tracks_fts');
+  await d1Raw(`CREATE VIRTUAL TABLE tracks_fts USING fts5(
+    title, artist, album,
+    tokenize = 'porter ascii'
+  )`);
+
+  const FTS_BATCH = 10_000;
+  const MAX_ID    = 7_743_491;
+  let ftsInserted = 0;
+  for (let lo = 1; lo <= MAX_ID; lo += FTS_BATCH) {
+    const hi = lo + FTS_BATCH - 1;
+    await d1Raw(
+      `INSERT INTO tracks_fts(rowid, title, artist, album)
+       SELECT id, title, artist, album FROM tracks WHERE id BETWEEN ${lo} AND ${hi}`
+    );
+    ftsInserted += FTS_BATCH;
+    if (ftsInserted % 500_000 === 0) {
+      process.stdout.write(`  ${ftsInserted.toLocaleString()} rows inserted…\n`);
+    }
+  }
   console.log('  ✓ FTS rebuilt');
 
   // ── Recreate FTS trigger ──────────────────────────────────────────────────────
