@@ -143,9 +143,8 @@ export default function SearchPage() {
           />
         )}
         {!hasQuery && (
-          <div className="mt-16 text-center text-sm text-gray-300 space-y-1">
+          <div className="mt-16 text-center text-sm text-gray-300">
             <p>Search by exact time, range, title, artist, or any combination.</p>
-            <p>Multiple versions of each song are preserved — that&rsquo;s a feature.</p>
           </div>
         )}
       </main>
