@@ -17,11 +17,14 @@ function parseDuration(str: string): number {
   return 0;
 }
 
-export function formatDuration(ms: number): string {
+export function formatDuration(ms: number, showMs = false): string {
   const totalSeconds = Math.floor(ms / 1000);
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
-  return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+  const base = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+  if (!showMs) return base;
+  const millis = ms % 1000;
+  return `${base}.${millis.toString().padStart(3, '0')}`;
 }
 
 // Given an exactDuration, return the ms range that displays as that time.

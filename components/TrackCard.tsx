@@ -8,7 +8,7 @@ interface TrackCardProps {
 }
 
 export default function TrackCard({ track, exactDuration, tolerance = 0 }: TrackCardProps) {
-  const duration = track.duration_ms != null ? formatDuration(track.duration_ms) : '?:??';
+  const duration = track.duration_ms != null ? formatDuration(track.duration_ms, true) : '?:??.???';
 
   // Blue = exactly the typed time (within the 1-second display window)
   // Gray = within tolerance but not exact
@@ -26,7 +26,7 @@ export default function TrackCard({ track, exactDuration, tolerance = 0 }: Track
   return (
     <div className="flex items-center gap-3 sm:gap-4 py-3 px-3 rounded-lg hover:bg-gray-50 transition-colors">
       {/* Duration */}
-      <div className={`flex-shrink-0 font-mono text-base sm:text-lg font-semibold w-12 sm:w-14 text-right tabular-nums ${
+      <div className={`flex-shrink-0 font-mono text-sm sm:text-base font-semibold w-20 sm:w-24 text-right tabular-nums ${
         isExact        ? 'text-blue-600' :
         isInTolerance  ? 'text-blue-400' :
                          'text-gray-600'
