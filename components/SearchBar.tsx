@@ -3,12 +3,14 @@
 import { useRef } from 'react';
 
 interface SearchBarProps {
-  value: string;
+  value:    string;
   onChange: (value: string) => void;
+  onSubmit: () => void;
+  onClear:  () => void;
   loading?: boolean;
 }
 
-export default function SearchBar({ value, onChange, loading }: SearchBarProps) {
+export default function SearchBar({ value, onChange, onSubmit, onClear, loading }: SearchBarProps) {
   const inputRef = useRef<HTMLInputElement>(null);
 
   return (
@@ -31,6 +33,7 @@ export default function SearchBar({ value, onChange, loading }: SearchBarProps) 
           type="text"
           value={value}
           onChange={(e) => onChange(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') onSubmit(); }}
           placeholder='Try "3:30", "love 4:20", "between 3:00 and 4:00"'
           className="flex-1 px-3 py-3.5 text-gray-900 placeholder-gray-400 bg-transparent outline-none text-base"
           autoFocus
@@ -39,21 +42,24 @@ export default function SearchBar({ value, onChange, loading }: SearchBarProps) 
         />
         {value && (
           <button
-            onClick={() => {
-              onChange('');
-              inputRef.current?.focus();
-            }}
-            className="pr-4 text-gray-400 hover:text-gray-600 transition-colors"
+            onClick={() => { onClear(); inputRef.current?.focus(); }}
+            className="px-2 text-gray-300 hover:text-gray-500 transition-colors flex-shrink-0"
             aria-label="Clear search"
           >
-            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
             </svg>
           </button>
         )}
+        <button
+          onClick={onSubmit}
+          className="mr-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white text-sm font-semibold rounded-xl transition-colors flex-shrink-0"
+        >
+          Search
+        </button>
       </div>
       <p className="text-xs text-gray-400 mt-1.5 pl-1">
-        Search by duration (3:16), range (3:00–4:00), title, or artist — or combine them
+        Search by duration (3:16), range (3:00 to 4:00), title, or artist. Combine freely.
       </p>
     </div>
   );

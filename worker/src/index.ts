@@ -24,13 +24,13 @@ function json(data: unknown, status = 200) {
 const JOINED_COLS = `
   t.id, t.title, t.artist, t.album, t.duration_ms,
   t.disambiguation AS version, t.isrc, t.release_year, t.mb_id,
-  t.genre, t.popularity
+  t.genre, t.popularity, t.release_type, t.label, t.track_number
 `;
 
 const DIRECT_COLS = `
   id, title, artist, album, duration_ms,
   disambiguation AS version, isrc, release_year, mb_id,
-  genre, popularity
+  genre, popularity, release_type, label, track_number
 `;
 
 // ── Utility ───────────────────────────────────────────────────────────────────
@@ -74,12 +74,12 @@ async function spotifyLookup(isrc: string, token: string): Promise<number | null
       `https://api.spotify.com/v1/search?q=isrc:${encodeURIComponent(isrc)}&type=track&limit=1`,
       { headers: { 'Authorization': `Bearer ${token}` } }
     );
-    if (res.status === 429) return null;   // rate limited — skip silently
-    if (!res.ok)            return null;
+    if (res.status === 429) { res.body?.cancel(); return null; } // rate limited
+    if (!res.ok)            { res.body?.cancel(); return null; }
     const data  = await res.json() as { tracks: { items: Array<{ popularity: number }> } };
     const items = data.tracks?.items;
-    if (!items || items.length === 0) return -1; // not on Spotify
-    return items[0].popularity;                  // 0–100
+    if (!items || items.length === 0) return -1;          // not on Spotify
+    return items[0].popularity ?? 0;                      // 0–100 (default 0 if field missing)
   } catch {
     return null;
   }
@@ -97,7 +97,7 @@ interface TrackRow {
  * Enrich tracks with Spotify popularity scores in parallel batches.
  * Mutates track objects in-place AND writes to D1 (best-effort).
  *
- * @param batchSize  parallel requests per batch (10 is polite)
+ * @param batchSize  parallel requests per batch (max 4 — CF Workers concurrent connection limit is 6)
  * @param delayMs    pause between batches in ms (0 for sync, 2000 for cron)
  */
 async function enrichWithSpotify(
@@ -246,11 +246,11 @@ export default {
       // popular songs sort to the top on the very first search.
       // Budget: 900ms (user-acceptable latency per their preference).
       if (hasKeywords && tracks.length > 0 && env.SPOTIFY_CLIENT_ID) {
-        const token = await withTimeout(getSpotifyToken(env), 400);
+        const token = await withTimeout(getSpotifyToken(env), 800);
         if (token) {
           await withTimeout(
-            enrichWithSpotify(tracks, token, env, 10, 0),
-            900,
+            enrichWithSpotify(tracks, token, env, 4, 0),
+            700,
           );
           // Re-sort after enrichment: popularity DESC, -1 (not on Spotify) last
           tracks.sort((a, b) =>
@@ -280,10 +280,9 @@ export default {
   },
 
   // ── Cron: background Spotify enrichment ────────────────────────────────────
-  // Runs every 5 minutes. 10 parallel requests with 4s cooldowns ≈ 2.5 req/sec
-  // ≈ 150 req/min ≈ ~50% of Spotify's rate limit — fast but not reckless.
-  // Rate: 750 tracks/run × 12 runs/hr × 24 hr = ~216,000/day.
-  // Full enrichment of 5.7M ISRC tracks: ~26 days.
+  // Runs every 5 minutes. 4 parallel requests (CF connection limit is 6) with
+  // 2s cooldowns ≈ 2 req/sec. Rate: 500 tracks/run × 12 runs/hr × 24 hr =
+  // ~144,000/day. Full enrichment of 5.7M ISRC tracks: ~40 days.
 
   async scheduled(
     _event: ScheduledEvent,
@@ -298,12 +297,12 @@ export default {
       return;
     }
 
-    // Grab the next 750 unscored tracks that have ISRCs
+    // Grab the next 500 unscored tracks that have ISRCs
     const result = await env.DB.prepare(`
       SELECT mb_id, isrc, popularity, genre
       FROM tracks
       WHERE isrc IS NOT NULL AND popularity IS NULL
-      LIMIT 750
+      LIMIT 500
     `).all();
 
     const tracks = (result.results ?? []) as TrackRow[];
@@ -313,8 +312,8 @@ export default {
     }
 
     console.log(`Cron: enriching ${tracks.length} tracks`);
-    // 10 parallel, 4s between batches = 2.5 req/sec sustained
-    await enrichWithSpotify(tracks, token, env, 10, 4000);
+    // 4 parallel (under CF's 6-connection limit), 2s between batches ≈ 2 req/sec
+    await enrichWithSpotify(tracks, token, env, 4, 2000);
     console.log('Cron: done');
   },
 };

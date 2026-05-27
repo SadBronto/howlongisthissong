@@ -198,14 +198,18 @@ async function importRecordings(
     const lengthMs       = nullInt(cols[4]);
     const comment        = nullStr(cols[5]);
 
-    if (!title || !mbId || !lengthMs || lengthMs <= 0) { skipped++; continue; }
+    const isrc = recId != null ? (isrcs.get(recId) ?? null) : null;
+
+    // Only import tracks with an ISRC — keeps the DB lean and ensures every
+    // track can be Spotify-enriched for popularity scoring.
+    if (!title || !mbId || !lengthMs || lengthMs <= 0 || !isrc) { skipped++; continue; }
 
     pending.push({
       title,
       artist:         artistCreditId != null ? (artistCredits.get(artistCreditId) ?? null) : null,
       duration_ms:    lengthMs,
       disambiguation: comment,
-      isrc:           recId != null ? (isrcs.get(recId) ?? null) : null,
+      isrc,
       mb_id:          mbId,
     });
 
