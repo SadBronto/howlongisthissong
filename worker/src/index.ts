@@ -280,10 +280,10 @@ export default {
   },
 
   // ── Cron: background Spotify enrichment ────────────────────────────────────
-  // Runs every 5 minutes, works through the backlog of unscored tracks.
-  // Batches of 10 with 2s cooldowns — polite to Spotify's rate limits.
-  // At this rate: ~1,200 tracks/hour, ~28,800/day.
-  // Full enrichment of 5.7M ISRC tracks: ~200 days.
+  // Runs every 5 minutes. 10 parallel requests with 4s cooldowns ≈ 2.5 req/sec
+  // ≈ 150 req/min ≈ ~50% of Spotify's rate limit — fast but not reckless.
+  // Rate: 750 tracks/run × 12 runs/hr × 24 hr = ~216,000/day.
+  // Full enrichment of 5.7M ISRC tracks: ~26 days.
 
   async scheduled(
     _event: ScheduledEvent,
@@ -298,12 +298,12 @@ export default {
       return;
     }
 
-    // Grab the next 200 unscored tracks that have ISRCs
+    // Grab the next 750 unscored tracks that have ISRCs
     const result = await env.DB.prepare(`
       SELECT mb_id, isrc, popularity, genre
       FROM tracks
       WHERE isrc IS NOT NULL AND popularity IS NULL
-      LIMIT 200
+      LIMIT 750
     `).all();
 
     const tracks = (result.results ?? []) as TrackRow[];
@@ -313,8 +313,8 @@ export default {
     }
 
     console.log(`Cron: enriching ${tracks.length} tracks`);
-    // 2s between batches keeps us well under Spotify's rate limit
-    await enrichWithSpotify(tracks, token, env, 10, 2000);
+    // 10 parallel, 4s between batches = 2.5 req/sec sustained
+    await enrichWithSpotify(tracks, token, env, 10, 4000);
     console.log('Cron: done');
   },
 };

@@ -41,8 +41,9 @@ CREATE TRIGGER IF NOT EXISTS tracks_ad AFTER DELETE ON tracks BEGIN
   VALUES ('delete', old.id, old.title, old.artist, old.album);
 END;
 
--- Keep FTS in sync on update
-CREATE TRIGGER IF NOT EXISTS tracks_au AFTER UPDATE ON tracks BEGIN
+-- Keep FTS in sync on update — only fires when searchable text actually changes,
+-- NOT on popularity/genre/release_year updates (saves ~2 wasted writes per enrichment)
+CREATE TRIGGER IF NOT EXISTS tracks_au AFTER UPDATE OF title, artist, album ON tracks BEGIN
   INSERT INTO tracks_fts(tracks_fts, rowid, title, artist, album)
   VALUES ('delete', old.id, old.title, old.artist, old.album);
   INSERT INTO tracks_fts(rowid, title, artist, album)
