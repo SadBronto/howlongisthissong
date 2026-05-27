@@ -71,6 +71,14 @@ function activeCount(f: Filters): number {
   return [f.genre, f.yearFrom, f.yearTo, f.releaseType, f.label].filter(Boolean).length;
 }
 
+// ── Duration normalizer ───────────────────────────────────────────────────────
+/** "2" → "2:00", "10" → "10:00"; leaves "3:16", "3:16.423", "" unchanged. */
+function normalizeDuration(s: string): string {
+  const t = s.trim();
+  if (/^\d{1,2}$/.test(t)) return `${t}:00`;
+  return t;
+}
+
 // ── Shared input style ────────────────────────────────────────────────────────
 const ADV_INPUT = [
   'border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-900',
@@ -187,12 +195,13 @@ export default function SearchPage() {
     const kw = [advTitle.trim(), advArtist.trim()].filter(Boolean).join(' ');
     if (kw) parts.push(kw);
     if (advDurMode === 'exact' && advExact.trim()) {
-      parts.push(advExact.trim());
+      parts.push(normalizeDuration(advExact));
     } else if (advDurMode === 'range') {
-      const from = advFrom.trim();
-      const to   = advTo.trim();
+      const from = normalizeDuration(advFrom);
+      const to   = normalizeDuration(advTo);
       if (from && to) parts.push(`${from} to ${to}`);
-      else if (from)  parts.push(from);
+      else if (from)  parts.push(`>${from}`);
+      else if (to)    parts.push(`<${to}`);
     }
     return parts.join(' ');
   };
