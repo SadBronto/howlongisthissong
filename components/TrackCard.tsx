@@ -82,12 +82,16 @@ export default function TrackCard({ track, exactDuration, tolerance = 0 }: Track
         </div>
       </div>
 
-      {/* Popularity dot — only shown once enriched, not shown for -1 (not on Spotify) */}
-      {track.popularity != null && track.popularity >= 0 && (
+      {/* Popularity dot — only shown once enriched */}
+      {track.popularity != null && track.popularity > 0 && (
         <div
           className="flex-shrink-0 w-1.5 h-1.5 rounded-full bg-blue-200"
           style={{ opacity: 0.3 + (track.popularity / 100) * 0.7 }}
-          title={`Popularity: ${track.popularity}/100 (Spotify)`}
+          title={`Popularity: ${track.popularity}/100 (${
+            track.popularity_source === 'lastfm' ? 'Last.fm' :
+            track.popularity_source === 'listenbrainz' ? 'ListenBrainz' :
+            'scored'
+          })`}
         />
       )}
     </div>

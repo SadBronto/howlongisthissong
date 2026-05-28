@@ -37,41 +37,50 @@ const DECADES = [
 
 // ── Filter state type ─────────────────────────────────────────────────────────
 interface Filters {
-  genre:       string;
-  yearFrom:    string;
-  yearTo:      string;
-  releaseType: string;
-  label:       string;
+  titleContains:  string;
+  artistContains: string;
+  genre:          string;
+  yearFrom:       string;
+  yearTo:         string;
+  releaseType:    string;
+  label:          string;
 }
-const EMPTY_FILTERS: Filters = { genre: '', yearFrom: '', yearTo: '', releaseType: '', label: '' };
+const EMPTY_FILTERS: Filters = {
+  titleContains: '', artistContains: '',
+  genre: '', yearFrom: '', yearTo: '', releaseType: '', label: '',
+};
 
 function filtersFromParams(sp: URLSearchParams): Filters {
   return {
-    genre:       sp.get('genre')        ?? '',
-    yearFrom:    sp.get('year_from')    ?? '',
-    yearTo:      sp.get('year_to')      ?? '',
-    releaseType: sp.get('release_type') ?? '',
-    label:       sp.get('label')        ?? '',
+    titleContains:  sp.get('title')        ?? '',
+    artistContains: sp.get('artist')       ?? '',
+    genre:          sp.get('genre')        ?? '',
+    yearFrom:       sp.get('year_from')    ?? '',
+    yearTo:         sp.get('year_to')      ?? '',
+    releaseType:    sp.get('release_type') ?? '',
+    label:          sp.get('label')        ?? '',
   };
 }
 
 function buildUrl(q: string, f: Filters, pg: number, pp: number, s: string): string {
   const p = new URLSearchParams();
-  if (q)             p.set('q',            q);
-  if (f.genre)       p.set('genre',        f.genre);
-  if (f.yearFrom)    p.set('year_from',    f.yearFrom);
-  if (f.yearTo)      p.set('year_to',      f.yearTo);
-  if (f.releaseType) p.set('release_type', f.releaseType);
-  if (f.label)       p.set('label',        f.label);
-  if (pg > 1)        p.set('page',         String(pg));
-  if (pp !== 50)     p.set('per_page',     String(pp));
-  if (s !== 'relevance') p.set('sort',     s);
+  if (q)                p.set('q',            q);
+  if (f.titleContains)  p.set('title',         f.titleContains);
+  if (f.artistContains) p.set('artist',        f.artistContains);
+  if (f.genre)          p.set('genre',         f.genre);
+  if (f.yearFrom)       p.set('year_from',     f.yearFrom);
+  if (f.yearTo)         p.set('year_to',       f.yearTo);
+  if (f.releaseType)    p.set('release_type',  f.releaseType);
+  if (f.label)          p.set('label',         f.label);
+  if (pg > 1)           p.set('page',          String(pg));
+  if (pp !== 50)        p.set('per_page',      String(pp));
+  if (s !== 'relevance') p.set('sort',         s);
   const qs = p.toString();
   return qs ? `/?${qs}` : '/';
 }
 
 function activeCount(f: Filters): number {
-  return [f.genre, f.yearFrom, f.yearTo, f.releaseType, f.label].filter(Boolean).length;
+  return [f.titleContains, f.artistContains, f.genre, f.yearFrom, f.yearTo, f.releaseType, f.label].filter(Boolean).length;
 }
 
 // ── Duration normalizer ───────────────────────────────────────────────────────
@@ -153,13 +162,15 @@ export default function SearchPage() {
         : '/api/search';
 
       const params = new URLSearchParams();
-      if (q.trim())       params.set('q',            q.trim());
-      if (tol > 0)        params.set('tolerance',     String(tol));
-      if (f.genre)        params.set('genre',         f.genre);
-      if (f.yearFrom)     params.set('year_from',     f.yearFrom);
-      if (f.yearTo)       params.set('year_to',       f.yearTo);
-      if (f.releaseType)  params.set('release_type',  f.releaseType);
-      if (f.label)        params.set('label',         f.label);
+      if (q.trim())           params.set('q',            q.trim());
+      if (tol > 0)            params.set('tolerance',     String(tol));
+      if (f.titleContains)    params.set('title',         f.titleContains);
+      if (f.artistContains)   params.set('artist',        f.artistContains);
+      if (f.genre)            params.set('genre',         f.genre);
+      if (f.yearFrom)         params.set('year_from',     f.yearFrom);
+      if (f.yearTo)           params.set('year_to',       f.yearTo);
+      if (f.releaseType)      params.set('release_type',  f.releaseType);
+      if (f.label)            params.set('label',         f.label);
       params.set('page',     String(pg));
       params.set('per_page', String(pp));
       if (s !== 'relevance') params.set('sort', s);
@@ -241,8 +252,8 @@ export default function SearchPage() {
   // ── Advanced form compile + submit ─────────────────────────────────────────
   const compileAdvancedQuery = (): string => {
     const parts: string[] = [];
-    const kw = [advTitle.trim(), advArtist.trim()].filter(Boolean).join(' ');
-    if (kw) parts.push(kw);
+    // Title and artist go as dedicated filter params, NOT as FTS keywords,
+    // so they match only the title/artist columns (not album or other indexed fields).
     if (advDurMode === 'exact' && advExact.trim()) {
       parts.push(normalizeDuration(advExact));
     } else if (advDurMode === 'range') {
@@ -258,11 +269,13 @@ export default function SearchPage() {
   const handleAdvancedSubmit = useCallback(() => {
     const compiled   = compileAdvancedQuery();
     const newFilters: Filters = {
-      genre:       advGenre,
-      yearFrom:    advYearFrom,
-      yearTo:      advYearTo,
-      releaseType: advRelType,
-      label:       advLabel,
+      titleContains:  advTitle.trim(),
+      artistContains: advArtist.trim(),
+      genre:          advGenre,
+      yearFrom:       advYearFrom,
+      yearTo:         advYearTo,
+      releaseType:    advRelType,
+      label:          advLabel,
     };
     if (!compiled && activeCount(newFilters) === 0) return;
     setQuery(compiled);
@@ -292,6 +305,8 @@ export default function SearchPage() {
   // Sync advanced filter fields from main filter state when advanced opens
   useEffect(() => {
     if (advExpanded) {
+      setAdvTitle(filters.titleContains);
+      setAdvArtist(filters.artistContains);
       setAdvGenre(filters.genre);
       setAdvYearFrom(filters.yearFrom);
       setAdvYearTo(filters.yearTo);
@@ -531,6 +546,16 @@ export default function SearchPage() {
         {/* Active filter chips (shown collapsed too) */}
         {numActive > 0 && !advExpanded && (
           <div className="flex flex-wrap gap-1.5 mt-2 px-4 max-w-2xl w-full">
+            {filters.titleContains && (
+              <span className="text-xs bg-blue-50 text-blue-700 border border-blue-200 px-2 py-0.5 rounded-full">
+                title: {filters.titleContains}
+              </span>
+            )}
+            {filters.artistContains && (
+              <span className="text-xs bg-blue-50 text-blue-700 border border-blue-200 px-2 py-0.5 rounded-full">
+                artist: {filters.artistContains}
+              </span>
+            )}
             {filters.genre && (
               <span className="text-xs bg-blue-50 text-blue-700 border border-blue-200 px-2 py-0.5 rounded-full">
                 genre: {filters.genre}

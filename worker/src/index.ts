@@ -72,17 +72,21 @@ async function enrichGenre(tracks: TrackRow[], env: Env): Promise<void> {
 // ── Search filters ────────────────────────────────────────────────────────────
 
 interface Filters {
-  genre?:       string;
-  yearFrom?:    number;
-  yearTo?:      number;
-  releaseType?: string;
-  label?:       string;
+  titleContains?:  string;
+  artistContains?: string;
+  genre?:          string;
+  yearFrom?:       number;
+  yearTo?:         number;
+  releaseType?:    string;
+  label?:          string;
 }
 
 function buildFilterClauses(f: Filters, alias: string): { sql: string; params: unknown[] } {
   const p     = alias ? `${alias}.` : '';
   const conds: string[]  = [];
   const vals:  unknown[] = [];
+  if (f.titleContains)    { conds.push(`${p}title LIKE ?`);        vals.push(`%${f.titleContains}%`); }
+  if (f.artistContains)   { conds.push(`${p}artist LIKE ?`);       vals.push(`%${f.artistContains}%`); }
   if (f.genre)            { conds.push(`${p}genre LIKE ?`);        vals.push(`%${f.genre}%`); }
   if (f.yearFrom != null) { conds.push(`${p}release_year >= ?`);   vals.push(f.yearFrom); }
   if (f.yearTo   != null) { conds.push(`${p}release_year <= ?`);   vals.push(f.yearTo); }
@@ -324,16 +328,18 @@ export default {
     const q         = url.searchParams.get('q') ?? '';
     const tolerance = parseInt(url.searchParams.get('tolerance') ?? '0', 10) || 0;
 
-    const genre       = url.searchParams.get('genre')        || undefined;
-    const yearFromRaw = url.searchParams.get('year_from');
-    const yearToRaw   = url.searchParams.get('year_to');
-    const yearFrom    = yearFromRaw ? parseInt(yearFromRaw, 10) : undefined;
-    const yearTo      = yearToRaw   ? parseInt(yearToRaw,   10) : undefined;
-    const releaseType = url.searchParams.get('release_type') || undefined;
-    const label       = url.searchParams.get('label')        || undefined;
+    const titleContains  = url.searchParams.get('title')        || undefined;
+    const artistContains = url.searchParams.get('artist')       || undefined;
+    const genre          = url.searchParams.get('genre')        || undefined;
+    const yearFromRaw    = url.searchParams.get('year_from');
+    const yearToRaw      = url.searchParams.get('year_to');
+    const yearFrom       = yearFromRaw ? parseInt(yearFromRaw, 10) : undefined;
+    const yearTo         = yearToRaw   ? parseInt(yearToRaw,   10) : undefined;
+    const releaseType    = url.searchParams.get('release_type') || undefined;
+    const label          = url.searchParams.get('label')        || undefined;
 
-    const filters: Filters = { genre, yearFrom, yearTo, releaseType, label };
-    const hasFilters = !!(genre || yearFrom != null || yearTo != null || releaseType || label);
+    const filters: Filters = { titleContains, artistContains, genre, yearFrom, yearTo, releaseType, label };
+    const hasFilters = !!(titleContains || artistContains || genre || yearFrom != null || yearTo != null || releaseType || label);
 
     const page    = Math.max(1, Math.min(500, parseInt(url.searchParams.get('page')     ?? '1',  10) || 1));
     const perPage = Math.max(1, Math.min(200, parseInt(url.searchParams.get('per_page') ?? '50', 10) || 50));
