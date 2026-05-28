@@ -1,7 +1,8 @@
 import { parseQuery, exactDurationRange, sanitizeForFts } from './queryParser';
 
 export interface Env {
-  DB: D1Database;
+  DB:              D1Database;
+  LASTFM_API_KEY:  string;
 }
 
 const CORS_HEADERS = {
@@ -114,6 +115,183 @@ function buildDurationClause(alias: string, minDuration: number | null, maxDurat
   } else {
     return { sql: `${p}duration_ms <= ?`,            params: [maxDuration!] };
   }
+}
+
+// ── Popularity enrichment (cron) ──────────────────────────────────────────────
+
+// Log normalization ceilings — empirically established before first run:
+//   Last.fm:      Creep + Smells Like Teen Spirit both at ~4.1M listeners → 5M ceiling
+//   ListenBrainz: Karma Police at 279,805 → 500K ceiling
+const LASTFM_CEILING = 5_000_000;
+const LB_CEILING     = 500_000;
+
+function calcLastfmScore(listeners: number): number {
+  if (listeners <= 0) return 0;
+  return Math.min(100, Math.round(Math.log10(listeners) / Math.log10(LASTFM_CEILING) * 100));
+}
+
+function calcLbScore(users: number): number {
+  if (users <= 0) return 0;
+  return Math.min(100, Math.round(Math.log10(users) / Math.log10(LB_CEILING) * 100));
+}
+
+interface EnrichRow {
+  id:     number;
+  mb_id:  string | null;
+  title:  string;
+  artist: string | null;
+}
+
+interface EnrichResult {
+  id:         number;
+  popularity: number;
+  source:     string;   // 'lastfm' | 'listenbrainz' | 'unfound'
+}
+
+// Last.fm: try MBID lookup first, fall back to artist+title
+async function lfmLookup(row: EnrichRow, apiKey: string): Promise<number | null> {
+  // MBID lookup
+  if (row.mb_id) {
+    try {
+      const r = await fetch(
+        `https://ws.audioscrobbler.com/2.0/?method=track.getInfo&mbid=${encodeURIComponent(row.mb_id)}&api_key=${apiKey}&format=json`,
+        { signal: AbortSignal.timeout(6000) }
+      );
+      if (r.ok) {
+        const d = await r.json() as { error?: number; track?: { listeners?: string } };
+        if (!d.error && d.track?.listeners != null) {
+          const n = parseInt(d.track.listeners, 10);
+          if (!isNaN(n)) return n;
+        }
+      }
+    } catch { /* fall through to artist+title */ }
+  }
+  // Artist + title fallback
+  if (row.artist && row.title) {
+    try {
+      const r = await fetch(
+        `https://ws.audioscrobbler.com/2.0/?method=track.getInfo` +
+        `&artist=${encodeURIComponent(row.artist)}&track=${encodeURIComponent(row.title)}` +
+        `&api_key=${apiKey}&format=json&autocorrect=1`,
+        { signal: AbortSignal.timeout(6000) }
+      );
+      if (r.ok) {
+        const d = await r.json() as { error?: number; track?: { listeners?: string } };
+        if (!d.error && d.track?.listeners != null) {
+          const n = parseInt(d.track.listeners, 10);
+          if (!isNaN(n)) return n;
+        }
+      }
+    } catch { /* not found */ }
+  }
+  return null;
+}
+
+// ListenBrainz: batch POST up to 200 MBIDs, returns map of mbid → user count
+async function lbBatch(mbids: string[]): Promise<Map<string, number>> {
+  const result = new Map<string, number>();
+  try {
+    const r = await fetch('https://api.listenbrainz.org/1/popularity/recording', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ recording_mbids: mbids }),
+      signal:  AbortSignal.timeout(15_000),
+    });
+    if (r.ok) {
+      const data = await r.json() as Array<{ recording_mbid: string; total_user_count: number }>;
+      for (const item of data) {
+        if (item.recording_mbid && item.total_user_count > 0) {
+          result.set(item.recording_mbid, item.total_user_count);
+        }
+      }
+    }
+  } catch { /* best-effort */ }
+  return result;
+}
+
+// Build a single CASE UPDATE for both columns
+function buildPopularityUpdate(rows: EnrichResult[]): string {
+  const popBranches = rows.map(r => `WHEN ${r.id} THEN ${r.popularity}`).join(' ');
+  const srcBranches = rows.map(r => `WHEN ${r.id} THEN '${r.source}'`).join(' ');
+  const ids         = rows.map(r => r.id).join(',');
+  return (
+    `UPDATE tracks SET ` +
+    `popularity = CASE id ${popBranches} ELSE popularity END, ` +
+    `popularity_source = CASE id ${srcBranches} ELSE popularity_source END ` +
+    `WHERE id IN (${ids})`
+  );
+}
+
+// Cron batch size: 50 tracks × 210ms = ~10.5s for Last.fm pass, safely fits in 30s window
+const CRON_BATCH  = 50;
+const LASTFM_WAIT = 210; // ms between Last.fm calls
+
+async function enrichPopularityCron(env: Env): Promise<void> {
+  if (!env.LASTFM_API_KEY) { console.error('Cron: LASTFM_API_KEY not set'); return; }
+
+  // Yield to local script if it's running — same API key, can't both hit Last.fm at once
+  const lock = await env.DB.prepare(
+    'SELECT local_active FROM enrichment_lock WHERE id = 1'
+  ).first<{ local_active: number }>();
+  if (lock?.local_active) {
+    console.log('Cron: local enrichment active — skipping this tick');
+    return;
+  }
+
+  // Read next batch of unscored tracks
+  const result = await env.DB.prepare(
+    `SELECT id, mb_id, title, artist FROM tracks WHERE popularity IS NULL LIMIT ${CRON_BATCH}`
+  ).all();
+
+  const rows = (result.results ?? []) as EnrichRow[];
+  if (rows.length === 0) {
+    console.log('Cron: all tracks scored — nothing to do');
+    return;
+  }
+
+  const scored:     EnrichResult[] = [];
+  const lbNeeded:   string[]       = [];  // mb_ids for ListenBrainz fallback
+  const mbidToId    = new Map<string, number>();
+
+  // ── Last.fm pass ─────────────────────────────────────────────────────────────
+  for (let i = 0; i < rows.length; i++) {
+    if (i > 0) await new Promise(r => setTimeout(r, LASTFM_WAIT));
+    const row = rows[i];
+    const listeners = await lfmLookup(row, env.LASTFM_API_KEY);
+
+    if (listeners !== null) {
+      scored.push({ id: row.id, popularity: calcLastfmScore(listeners), source: 'lastfm' });
+    } else if (row.mb_id) {
+      lbNeeded.push(row.mb_id);
+      mbidToId.set(row.mb_id, row.id);
+    } else {
+      scored.push({ id: row.id, popularity: 0, source: 'unfound' });
+    }
+  }
+
+  // ── ListenBrainz fallback (one batch POST for all Last.fm misses) ─────────────
+  if (lbNeeded.length > 0) {
+    const lbMap = await lbBatch(lbNeeded);
+    for (const mbid of lbNeeded) {
+      const users   = lbMap.get(mbid);
+      const trackId = mbidToId.get(mbid)!;
+      if (users != null && users > 0) {
+        scored.push({ id: trackId, popularity: calcLbScore(users), source: 'listenbrainz' });
+      } else {
+        scored.push({ id: trackId, popularity: 0, source: 'unfound' });
+      }
+    }
+  }
+
+  // ── Write results ────────────────────────────────────────────────────────────
+  if (scored.length > 0) {
+    await env.DB.prepare(buildPopularityUpdate(scored)).run();
+  }
+
+  const lfmHits = scored.filter(r => r.source === 'lastfm').length;
+  const lbHits  = scored.filter(r => r.source === 'listenbrainz').length;
+  const unfound = scored.filter(r => r.source === 'unfound').length;
+  console.log(`Cron: ${rows.length} tracks — lfm:${lfmHits} lb:${lbHits} unfound:${unfound}`);
 }
 
 // ── Handlers ──────────────────────────────────────────────────────────────────
@@ -312,5 +490,9 @@ export default {
       console.error('Search error:', err);
       return json({ error: 'Search failed' }, 500);
     }
+  },
+
+  async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
+    ctx.waitUntil(enrichPopularityCron(env));
   },
 };

@@ -618,10 +618,15 @@ export default function SearchPage() {
       </main>
 
       <footer className="text-center text-xs text-gray-300 py-4 border-t border-gray-100">
-        Data from{' '}
+        Track data from{' '}
         <a href="https://musicbrainz.org" target="_blank" rel="noopener noreferrer"
-          className="underline hover:text-gray-500 transition-colors">MusicBrainz
-        </a>{' '}and other public sources.
+          className="underline hover:text-gray-500 transition-colors">MusicBrainz</a>
+        {' '}· Popularity from{' '}
+        <a href="https://www.last.fm" target="_blank" rel="noopener noreferrer"
+          className="underline hover:text-gray-500 transition-colors">Last.fm</a>
+        {' '}&amp;{' '}
+        <a href="https://listenbrainz.org" target="_blank" rel="noopener noreferrer"
+          className="underline hover:text-gray-500 transition-colors">ListenBrainz</a>
       </footer>
     </div>
   );

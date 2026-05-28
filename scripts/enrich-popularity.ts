@@ -111,6 +111,16 @@ function sleep(ms: number): Promise<void> {
   return new Promise(r => setTimeout(r, ms));
 }
 
+function fmtDuration(sec: number): string {
+  if (!isFinite(sec) || sec <= 0) return '--';
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = Math.floor(sec % 60);
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
+}
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 interface TrackRow {
@@ -240,6 +250,24 @@ function writeCursor(id: number): void {
   fs.writeFileSync(CURSOR_FILE, String(id), 'utf8');
 }
 
+// ── Cron lock ─────────────────────────────────────────────────────────────────
+
+let lockCleared = false;
+
+async function acquireLock(): Promise<void> {
+  await d1Raw('UPDATE enrichment_lock SET local_active = 1 WHERE id = 1');
+  console.log('Cron paused — local enrichment has the lock.');
+}
+
+async function releaseLock(): Promise<void> {
+  if (lockCleared) return;
+  lockCleared = true;
+  try {
+    await d1Raw('UPDATE enrichment_lock SET local_active = 0 WHERE id = 1');
+    console.log('Lock released — cron will resume on next tick.');
+  } catch { /* best-effort */ }
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 async function main() {
@@ -254,10 +282,20 @@ async function main() {
     process.exit(1);
   }
 
+  // Pause the worker cron so both don't hammer Last.fm simultaneously
+  await acquireLock();
+
+  // Release lock on Ctrl+C or kill signal
+  process.on('SIGINT',  async () => { await releaseLock(); process.exit(0); });
+  process.on('SIGTERM', async () => { await releaseLock(); process.exit(0); });
+
   const includeUnfound = process.argv.includes('--include-unfound');
   const whereClause    = includeUnfound
     ? `(popularity IS NULL OR popularity_source = 'unfound')`
     : `popularity IS NULL`;
+
+  const limitArg = process.argv.find(a => a.startsWith('--limit='));
+  const limit    = limitArg ? parseInt(limitArg.split('=')[1], 10) : Infinity;
 
   let cursor = readCursor();
   if (cursor > 0) {
@@ -271,6 +309,7 @@ async function main() {
   let totalLb        = 0;
   let totalUnfound   = 0;
   let totalWriteErrs = 0;
+  let exhausted      = false;
   const startTime    = Date.now();
 
   console.log('');
@@ -291,7 +330,13 @@ async function main() {
     );
 
     if (rows.length === 0) {
+      exhausted = true;
       console.log('\nNo more tracks to process — done!');
+      break;
+    }
+
+    if (totalProcessed >= limit) {
+      console.log(`\nReached --limit=${limit}. Stopping.`);
       break;
     }
 
@@ -367,22 +412,36 @@ async function main() {
 
     // ── Progress ─────────────────────────────────────────────────────────────
     const elapsedSec = (Date.now() - startTime) / 1000;
-    const rate       = (totalProcessed / elapsedSec).toFixed(1);
-    const pctLfm     = totalProcessed > 0 ? ((totalLastfm / totalProcessed) * 100).toFixed(0) : '0';
+    const ratePerMin = elapsedSec > 0 ? Math.round((totalProcessed / elapsedSec) * 60) : 0;
 
-    process.stdout.write(
-      `\r  ${totalProcessed.toLocaleString()} processed | ` +
-      `${totalLastfm.toLocaleString()} lfm (${pctLfm}%) | ` +
-      `${totalLb.toLocaleString()} lb | ` +
-      `${totalUnfound.toLocaleString()} unfound | ` +
-      `${rate}/s | cursor ${cursor}`
-    );
+    if (limit < Infinity) {
+      const pct      = ((totalProcessed / limit) * 100).toFixed(1);
+      const etaSec   = ratePerMin > 0 ? ((limit - totalProcessed) / ratePerMin) * 60 : 0;
+      process.stdout.write(
+        `\r  ${totalProcessed.toLocaleString()}/${limit.toLocaleString()} (${pct}%) | ` +
+        `ETA: ${fmtDuration(etaSec)} | ` +
+        `lfm: ${totalLastfm.toLocaleString()}  lb: ${totalLb.toLocaleString()}  unfound: ${totalUnfound.toLocaleString()} | ` +
+        `${ratePerMin}/min`
+      );
+    } else {
+      process.stdout.write(
+        `\r  ${totalProcessed.toLocaleString()} processed | ` +
+        `${fmtDuration(elapsedSec)} elapsed | ` +
+        `lfm: ${totalLastfm.toLocaleString()}  lb: ${totalLb.toLocaleString()}  unfound: ${totalUnfound.toLocaleString()} | ` +
+        `${ratePerMin}/min`
+      );
+    }
   }
 
   process.stdout.write('\n');
 
-  // Clean up cursor — we've exhausted the query
-  try { fs.unlinkSync(CURSOR_FILE); } catch { /* already gone */ }
+  // Only delete the cursor when all tracks are exhausted.
+  // If we stopped due to --limit, keep it so the next run continues from here.
+  if (exhausted) {
+    try { fs.unlinkSync(CURSOR_FILE); } catch { /* already gone */ }
+  }
+
+  await releaseLock();
 
   const elapsed = ((Date.now() - startTime) / 1000).toFixed(0);
   const scored  = totalLastfm + totalLb;
