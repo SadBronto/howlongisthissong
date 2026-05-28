@@ -252,9 +252,10 @@ async function enrichPopularityCron(env: Env): Promise<void> {
     return;
   }
 
-  // Read next batch of unscored tracks
+  // Read next batch of unscored tracks — highest search_count first so
+  // frequently searched songs get scored before obscure ones
   const result = await env.DB.prepare(
-    `SELECT id, mb_id, title, artist FROM tracks WHERE popularity IS NULL LIMIT ${CRON_BATCH}`
+    `SELECT id, mb_id, title, artist FROM tracks WHERE popularity IS NULL ORDER BY search_count DESC LIMIT ${CRON_BATCH}`
   ).all();
 
   const rows = (result.results ?? []) as EnrichRow[];
