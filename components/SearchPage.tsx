@@ -210,7 +210,8 @@ export default function SearchPage() {
   const [advLangIsOther,   setAdvLangIsOther]   = useState(false);
   const [showLangModal,    setShowLangModal]    = useState(false);
 
-  const abortRef = useRef<AbortController | null>(null);
+  const abortRef        = useRef<AbortController | null>(null);
+  const scrollToTopRef  = useRef(false);
 
   // ── Core fetch ─────────────────────────────────────────────────────────────
   const doSearch = useCallback(async (
@@ -306,7 +307,7 @@ export default function SearchPage() {
   const handlePageChange = useCallback((pg: number) => {
     setPage(pg);
     doSearch(query, tolerance, filters, pg, perPage, sort);
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    scrollToTopRef.current = true;
     router.replace(buildUrl(query, filters, pg, perPage, sort), { scroll: false });
   }, [query, tolerance, filters, perPage, sort, doSearch, router]);
 
@@ -403,6 +404,14 @@ export default function SearchPage() {
       setAdvLangIsOther(!!filters.language && !TOP_LANG_CODES.has(filters.language));
     }
   }, [advExpanded]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Scroll to top after new page results render
+  useEffect(() => {
+    if (scrollToTopRef.current) {
+      scrollToTopRef.current = false;
+      window.scrollTo({ top: 0 });
+    }
+  }, [results]);
 
   // ── Initial search from URL ────────────────────────────────────────────────
   useEffect(() => {
