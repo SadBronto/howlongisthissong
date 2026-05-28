@@ -2,7 +2,7 @@
  * AcousticBrainz Enrichment
  *
  * Adds 7 audio-analysis columns to the tracks table using the flat CSV dumps
- * from AcousticBrainz (shut down 2022, final dump available at acousticbrainz.org/download):
+ * from AcousticBrainz (shut down 2022, final dump at acousticbrainz.org/download):
  *
  *   bpm              REAL   — tempo in beats per minute
  *   danceability     REAL   — Essentia 0–3 danceability score
@@ -12,36 +12,29 @@
  *   loudness         REAL   — Essentia average_loudness
  *   dynamic_complexity REAL — high = wide loud/soft contrast, low = compressed
  *
- * Required CSV files (download from acousticbrainz.org/download, place in AB_PATH):
- *   rhythm.csv    — contains bpm, danceability
- *   tonal.csv     — contains key_key, key_scale, tuning_frequency
- *   lowlevel.csv  — contains average_loudness, dynamic_complexity
+ * Memory-efficient pipeline:
+ *   Phase A-1  Load mb_ids from cache or D1 → filter Set   (~800 MB)
+ *   Phase A-2  Stream each source CSV → write matched rows to small intermediate files
+ *              (no Maps held in memory — filter Set + seen Set per CSV only, ~950 MB peak)
+ *   Phase A-3  Clear filter Set. Load 3 small matched files → merge → write merged.csv (~250 MB)
+ *   Phase B-1  ALTER TABLE (idempotent)
+ *   Phase B-2  Stream merged.csv → batch CASE UPDATE D1 with progress bar (tiny memory)
  *
- * Each CSV has header row: mbid, submission_offset, ...fields...
- * Multiple rows per mbid (multiple submissions) — first submission wins per file.
- *
- * Coverage: ~30-50% of our tracks will match. The rest stay NULL for these columns.
- *
- * Phases:
- *   1. Load our 5.7M mb_ids from D1 into a filter Set
- *   2. Stream each CSV, keep only matching mb_ids (first-wins per mbid)
- *   3. Merge the three result Maps
- *   4. ALTER TABLE to add 7 columns (idempotent)
- *   5. Batch CASE UPDATE D1 with progress bar
- *
- * No temp file needed — matched data fits comfortably in RAM.
- * Not resumable (re-run overwrites same rows with same values — safe).
+ * Resumable:
+ *   Re-running skips Phase A if merged.csv already exists.
+ *   Use --rebuild to force full rebuild from source CSVs.
+ *   Use --refresh-ids to force re-fetch of mb_ids from D1.
  *
  * Usage:
  *   npm run enrich-acousticbrainz
+ *   npm run enrich-acousticbrainz -- --rebuild
+ *   npm run enrich-acousticbrainz -- --refresh-ids
  *
  * Required in .env.local:
- *   CLOUDFLARE_ACCOUNT_ID
- *   CLOUDFLARE_API_TOKEN
- *   CLOUDFLARE_D1_DATABASE_ID
+ *   CLOUDFLARE_ACCOUNT_ID  /  CLOUDFLARE_API_TOKEN  /  CLOUDFLARE_D1_DATABASE_ID
  *
- * Optional:
- *   AB_PATH=./acousticbrainz   (directory containing the three CSV files)
+ * Optional env:
+ *   AB_PATH=./acousticbrainz
  */
 
 import * as fs       from 'fs';
@@ -55,26 +48,26 @@ const ACCOUNT_ID  = process.env.CLOUDFLARE_ACCOUNT_ID!;
 const API_TOKEN   = process.env.CLOUDFLARE_API_TOKEN!;
 const DATABASE_ID = process.env.CLOUDFLARE_D1_DATABASE_ID!;
 const AB_PATH     = process.env.AB_PATH ?? './acousticbrainz';
+const REBUILD     = process.argv.includes('--rebuild');
+const REFRESH_IDS = process.argv.includes('--refresh-ids');
 
-const ROWS_PER_BATCH = 200;
-const WRITE_CONC     = 8;
+// File paths
+const RHYTHM_SRC      = path.join(AB_PATH, 'rhythm.csv');
+const TONAL_SRC       = path.join(AB_PATH, 'tonal.csv');
+const LOWLEVEL_SRC    = path.join(AB_PATH, 'lowlevel.csv');
+const RHYTHM_MATCHED  = path.join(AB_PATH, 'rhythm_matched.csv');
+const TONAL_MATCHED   = path.join(AB_PATH, 'tonal_matched.csv');
+const LOWLEVEL_MATCHED = path.join(AB_PATH, 'lowlevel_matched.csv');
+const MERGED_FILE     = path.join(AB_PATH, 'merged.csv');
+const MBIDS_FILE      = path.join(AB_PATH, 'mb_ids.txt');
+
+const ROWS_PER_BATCH = 100;
+const WRITE_CONC     = 16;
 const LOAD_CONC      = 20;
 const ID_RANGE       = 10_000;
 const BAR_WIDTH      = 32;
 
 const D1_URL = `https://api.cloudflare.com/client/v4/accounts/${ACCOUNT_ID}/d1/database/${DATABASE_ID}`;
-
-// ── Data types ─────────────────────────────────────────────────────────────────
-
-interface AcousticData {
-  bpm?:               number;
-  danceability?:      number;
-  key_key?:           string;
-  key_scale?:         string;
-  tuning_freq?:       number;
-  loudness?:          number;
-  dynamic_complexity?: number;
-}
 
 // ── D1 helpers ─────────────────────────────────────────────────────────────────
 
@@ -104,13 +97,13 @@ async function d1Raw(sql: string): Promise<void> {
       body:    JSON.stringify({ sql, params: [] }),
     });
     if (res.status === 429) { await sleep(2000 * (attempt + 1)); continue; }
-    const data = await res.json() as { success: boolean; errors?: unknown[] };
+    const text = await res.text();
+    let data: { success: boolean; errors?: unknown[] };
+    try { data = JSON.parse(text); } catch { throw new Error(`D1 raw HTTP ${res.status}: ${text.slice(0, 300)}`); }
     if (!data.success) throw new Error(`D1 raw: ${JSON.stringify(data.errors)}`);
     return;
   }
 }
-
-// ── Concurrency helper ─────────────────────────────────────────────────────────
 
 async function runConcurrent(tasks: Array<() => Promise<void>>, concurrency: number): Promise<void> {
   const active = new Map<symbol, Promise<void>>();
@@ -123,9 +116,34 @@ async function runConcurrent(tasks: Array<() => Promise<void>>, concurrency: num
   await Promise.all(active.values());
 }
 
-// ── Phase 1: load our mb_ids from D1 ──────────────────────────────────────────
+// ── Helpers ────────────────────────────────────────────────────────────────────
+
+function parseNum(s: string): number | undefined { const n = parseFloat(s); return isNaN(n) ? undefined : n; }
+function sq(s: string): string { return `'${s.replace(/'/g, "''")}'`; }
+function n(v: number | undefined): string { return v !== undefined ? String(v) : ''; }
+function s(v: string  | undefined): string { return v ? v.replace(/[,\r\n]/g, '') : ''; }
+
+function lines(filePath: string) {
+  return readline.createInterface({
+    input: fs.createReadStream(filePath, { encoding: 'utf8' }),
+    crlfDelay: Infinity,
+  });
+}
+
+function endStream(ws: fs.WriteStream): Promise<void> {
+  return new Promise((res, rej) => ws.end(err => err ? rej(err) : res()));
+}
+
+// ── Phase A-1: load mb_ids ─────────────────────────────────────────────────────
 
 async function loadOurMbIds(): Promise<Set<string>> {
+  if (fs.existsSync(MBIDS_FILE) && !REFRESH_IDS) {
+    process.stdout.write('  Loading mb_ids from cache…');
+    const ids = new Set(fs.readFileSync(MBIDS_FILE, 'utf8').split('\n').filter(Boolean));
+    process.stdout.write(`\r  ${ids.size.toLocaleString()} mb_ids loaded from cache                       \n`);
+    return ids;
+  }
+
   process.stdout.write('  Loading mb_ids from D1…');
   const maxRow = await d1Query<{ m: number }>('SELECT MAX(id) AS m FROM tracks');
   const maxId  = maxRow[0]?.m ?? 8_000_000;
@@ -147,199 +165,262 @@ async function loadOurMbIds(): Promise<Set<string>> {
     }),
     LOAD_CONC,
   );
-
   process.stdout.write(`\r  ${ids.size.toLocaleString()} mb_ids loaded from D1                        \n`);
+
+  process.stdout.write('  Saving mb_ids cache…');
+  fs.writeFileSync(MBIDS_FILE, [...ids].join('\n'), 'utf8');
+  process.stdout.write(`\r  mb_ids cached to ${MBIDS_FILE}                                \n`);
+
   return ids;
 }
 
-// ── Phase 2: stream CSV files ──────────────────────────────────────────────────
+// ── Phase A-2: stream each source CSV → write matched rows to file ─────────────
+// No Maps built here. filter Set + a small seen Set per CSV is all that's in RAM.
 
-async function streamLines(filePath: string) {
-  const input = fs.createReadStream(filePath, { encoding: 'utf8' });
-  return readline.createInterface({ input, crlfDelay: Infinity });
-}
+async function streamRhythm(filter: Set<string>): Promise<number> {
+  const seen   = new Set<string>();
+  const writer = fs.createWriteStream(RHYTHM_MATCHED, { encoding: 'utf8' });
+  writer.write('mb_id,bpm,danceability\n');
+  let totalLines = 0, matched = 0, first = true;
+  let iMbid = 0, iBpm = 0, iDance = 0;
 
-function parseFloat_(s: string): number | undefined {
-  const n = parseFloat(s);
-  return isNaN(n) ? undefined : n;
-}
-
-async function streamRhythm(
-  filePath: string,
-  filter: Set<string>,
-): Promise<Map<string, AcousticData>> {
-  const map = new Map<string, AcousticData>();
-  const rl  = await streamLines(filePath);
-  let lines = 0;
-  let first = true;
-  let iMbid = 0, iBpm = 2, iDance = 7; // default column positions
-
-  for await (const line of rl) {
+  for await (const line of lines(RHYTHM_SRC)) {
     if (first) {
       first = false;
-      // Parse header to find column positions
       const cols = line.split(',').map(c => c.replace(/"/g, '').trim());
-      iMbid  = cols.indexOf('mbid');
-      iBpm   = cols.indexOf('bpm');
-      iDance = cols.indexOf('danceability');
+      iMbid = cols.indexOf('mbid'); iBpm = cols.indexOf('bpm'); iDance = cols.indexOf('danceability');
       continue;
     }
-    if (++lines % 2_000_000 === 0)
-      process.stdout.write(`\r  rhythm.csv: ${(lines / 1e6).toFixed(0)}M rows · ${map.size.toLocaleString()} matched…`);
+    if (++totalLines % 2_000_000 === 0)
+      process.stdout.write(`\r  rhythm.csv: ${(totalLines / 1e6).toFixed(0)}M rows · ${matched.toLocaleString()} matched…`);
 
     const cols = line.split(',');
     const mbid = cols[iMbid]?.replace(/"/g, '').trim();
-    if (!mbid || !filter.has(mbid) || map.has(mbid)) continue;
+    if (!mbid || !filter.has(mbid) || seen.has(mbid)) continue;
 
-    const bpm         = parseFloat_(cols[iBpm]);
-    const danceability = parseFloat_(cols[iDance]);
-    if (bpm !== undefined || danceability !== undefined)
-      map.set(mbid, { bpm, danceability });
+    const bpm          = parseNum(cols[iBpm]);
+    const danceability = parseNum(cols[iDance]);
+    if (bpm === undefined && danceability === undefined) continue;
+
+    writer.write(`${mbid},${n(bpm)},${n(danceability)}\n`);
+    seen.add(mbid);
+    matched++;
   }
-  process.stdout.write(`\r  rhythm.csv: ${lines.toLocaleString()} rows · ${map.size.toLocaleString()} matched         \n`);
-  return map;
+  await endStream(writer);
+  process.stdout.write(`\r  rhythm.csv: ${totalLines.toLocaleString()} rows · ${matched.toLocaleString()} matched         \n`);
+  return matched;
 }
 
-async function streamTonal(
-  filePath: string,
-  filter: Set<string>,
-): Promise<Map<string, AcousticData>> {
-  const map = new Map<string, AcousticData>();
-  const rl  = await streamLines(filePath);
-  let lines = 0;
-  let first = true;
-  let iMbid = 0, iKey = 2, iScale = 3, iTune = 4;
+async function streamTonal(filter: Set<string>): Promise<number> {
+  const seen   = new Set<string>();
+  const writer = fs.createWriteStream(TONAL_MATCHED, { encoding: 'utf8' });
+  writer.write('mb_id,key_key,key_scale,tuning_freq\n');
+  let totalLines = 0, matched = 0, first = true;
+  let iMbid = 0, iKey = 0, iScale = 0, iTune = 0;
 
-  for await (const line of rl) {
+  for await (const line of lines(TONAL_SRC)) {
     if (first) {
       first = false;
       const cols = line.split(',').map(c => c.replace(/"/g, '').trim());
-      iMbid  = cols.indexOf('mbid');
-      iKey   = cols.indexOf('key_key');
-      iScale = cols.indexOf('key_scale');
-      iTune  = cols.indexOf('tuning_frequency');
+      iMbid = cols.indexOf('mbid'); iKey = cols.indexOf('key_key');
+      iScale = cols.indexOf('key_scale'); iTune = cols.indexOf('tuning_frequency');
       continue;
     }
-    if (++lines % 2_000_000 === 0)
-      process.stdout.write(`\r  tonal.csv: ${(lines / 1e6).toFixed(0)}M rows · ${map.size.toLocaleString()} matched…`);
+    if (++totalLines % 2_000_000 === 0)
+      process.stdout.write(`\r  tonal.csv: ${(totalLines / 1e6).toFixed(0)}M rows · ${matched.toLocaleString()} matched…`);
 
-    const cols  = line.split(',');
-    const mbid  = cols[iMbid]?.replace(/"/g, '').trim();
-    if (!mbid || !filter.has(mbid) || map.has(mbid)) continue;
+    const cols     = line.split(',');
+    const mbid     = cols[iMbid]?.replace(/"/g, '').trim();
+    if (!mbid || !filter.has(mbid) || seen.has(mbid)) continue;
 
     const key_key   = cols[iKey]?.replace(/"/g, '').trim()   || undefined;
     const key_scale = cols[iScale]?.replace(/"/g, '').trim() || undefined;
-    const tuning    = parseFloat_(cols[iTune]);
-    if (key_key || key_scale || tuning !== undefined)
-      map.set(mbid, { key_key, key_scale, tuning_freq: tuning });
+    const tuning    = parseNum(cols[iTune]);
+    if (!key_key && !key_scale && tuning === undefined) continue;
+
+    writer.write(`${mbid},${s(key_key)},${s(key_scale)},${n(tuning)}\n`);
+    seen.add(mbid);
+    matched++;
   }
-  process.stdout.write(`\r  tonal.csv: ${lines.toLocaleString()} rows · ${map.size.toLocaleString()} matched          \n`);
-  return map;
+  await endStream(writer);
+  process.stdout.write(`\r  tonal.csv: ${totalLines.toLocaleString()} rows · ${matched.toLocaleString()} matched          \n`);
+  return matched;
 }
 
-async function streamLowlevel(
-  filePath: string,
-  filter: Set<string>,
-): Promise<Map<string, AcousticData>> {
-  const map = new Map<string, AcousticData>();
-  const rl  = await streamLines(filePath);
-  let lines = 0;
-  let first = true;
-  let iMbid = 0, iLoud = 2, iDyn = 3;
+async function streamLowlevel(filter: Set<string>): Promise<number> {
+  const seen   = new Set<string>();
+  const writer = fs.createWriteStream(LOWLEVEL_MATCHED, { encoding: 'utf8' });
+  writer.write('mb_id,loudness,dynamic_complexity\n');
+  let totalLines = 0, matched = 0, first = true;
+  let iMbid = 0, iLoud = 0, iDyn = 0;
 
-  for await (const line of rl) {
+  for await (const line of lines(LOWLEVEL_SRC)) {
     if (first) {
       first = false;
       const cols = line.split(',').map(c => c.replace(/"/g, '').trim());
-      iMbid = cols.indexOf('mbid');
-      iLoud = cols.indexOf('average_loudness');
-      iDyn  = cols.indexOf('dynamic_complexity');
+      iMbid = cols.indexOf('mbid'); iLoud = cols.indexOf('average_loudness'); iDyn = cols.indexOf('dynamic_complexity');
       continue;
     }
-    if (++lines % 2_000_000 === 0)
-      process.stdout.write(`\r  lowlevel.csv: ${(lines / 1e6).toFixed(0)}M rows · ${map.size.toLocaleString()} matched…`);
+    if (++totalLines % 2_000_000 === 0)
+      process.stdout.write(`\r  lowlevel.csv: ${(totalLines / 1e6).toFixed(0)}M rows · ${matched.toLocaleString()} matched…`);
 
     const cols = line.split(',');
     const mbid = cols[iMbid]?.replace(/"/g, '').trim();
-    if (!mbid || !filter.has(mbid) || map.has(mbid)) continue;
+    if (!mbid || !filter.has(mbid) || seen.has(mbid)) continue;
 
-    const loudness          = parseFloat_(cols[iLoud]);
-    const dynamic_complexity = parseFloat_(cols[iDyn]);
-    if (loudness !== undefined || dynamic_complexity !== undefined)
-      map.set(mbid, { loudness, dynamic_complexity });
+    const loudness           = parseNum(cols[iLoud]);
+    const dynamic_complexity = parseNum(cols[iDyn]);
+    if (loudness === undefined && dynamic_complexity === undefined) continue;
+
+    writer.write(`${mbid},${n(loudness)},${n(dynamic_complexity)}\n`);
+    seen.add(mbid);
+    matched++;
   }
-  process.stdout.write(`\r  lowlevel.csv: ${lines.toLocaleString()} rows · ${map.size.toLocaleString()} matched        \n`);
-  return map;
+  await endStream(writer);
+  process.stdout.write(`\r  lowlevel.csv: ${totalLines.toLocaleString()} rows · ${matched.toLocaleString()} matched        \n`);
+  return matched;
 }
 
-// ── Phase 3: merge Maps ────────────────────────────────────────────────────────
+// ── Phase A-3: merge 3 small matched files → merged.csv ───────────────────────
+// Filter Set is cleared before this runs. Peak RAM here: ~250 MB.
 
-function mergeMaps(
-  rhythm:   Map<string, AcousticData>,
-  tonal:    Map<string, AcousticData>,
-  lowlevel: Map<string, AcousticData>,
-): Map<string, AcousticData> {
+interface AcousticData {
+  bpm?:                number;
+  danceability?:       number;
+  key_key?:            string;
+  key_scale?:          string;
+  tuning_freq?:        number;
+  loudness?:           number;
+  dynamic_complexity?: number;
+}
+
+async function buildMergedCsv(): Promise<number> {
   const merged = new Map<string, AcousticData>();
-  for (const [mbid, d] of rhythm)   merged.set(mbid, { ...d });
-  for (const [mbid, d] of tonal)    { const e = merged.get(mbid); e ? Object.assign(e, d) : merged.set(mbid, { ...d }); }
-  for (const [mbid, d] of lowlevel) { const e = merged.get(mbid); e ? Object.assign(e, d) : merged.set(mbid, { ...d }); }
-  return merged;
-}
 
-// ── Phase 5: batch CASE UPDATE ─────────────────────────────────────────────────
-
-function sq(s: string): string { return `'${s.replace(/'/g, "''")}'`; }
-
-function buildBatchUpdate(chunk: Array<[string, AcousticData]>): string {
-  function numCase(col: string, get: (d: AcousticData) => number | undefined): string {
-    const rows = chunk.filter(([, d]) => get(d) !== undefined);
-    if (rows.length === 0) return `${col} = ${col}`;
-    const branches = rows.map(([mbid, d]) => `WHEN ${sq(mbid)} THEN ${get(d)}`).join(' ');
-    return `${col} = CASE mb_id ${branches} ELSE ${col} END`;
-  }
-  function strCase(col: string, get: (d: AcousticData) => string | undefined): string {
-    const rows = chunk.filter(([, d]) => get(d) !== undefined);
-    if (rows.length === 0) return `${col} = ${col}`;
-    const branches = rows.map(([mbid, d]) => `WHEN ${sq(mbid)} THEN ${sq(get(d)!)}`).join(' ');
-    return `${col} = CASE mb_id ${branches} ELSE ${col} END`;
+  // rhythm_matched: mb_id, bpm, danceability
+  let first = true;
+  for await (const line of lines(RHYTHM_MATCHED)) {
+    if (first) { first = false; continue; }
+    const [mbid, bpm, danceability] = line.split(',');
+    if (!mbid) continue;
+    merged.set(mbid, { bpm: parseNum(bpm), danceability: parseNum(danceability) });
   }
 
-  const mbids = chunk.map(([mbid]) => sq(mbid)).join(',');
-  const sets  = [
-    numCase('bpm',               d => d.bpm),
-    numCase('danceability',      d => d.danceability),
-    strCase('key_key',           d => d.key_key),
-    strCase('key_scale',         d => d.key_scale),
-    numCase('tuning_freq',       d => d.tuning_freq),
-    numCase('loudness',          d => d.loudness),
-    numCase('dynamic_complexity', d => d.dynamic_complexity),
-  ].join(',\n  ');
+  // tonal_matched: mb_id, key_key, key_scale, tuning_freq
+  first = true;
+  for await (const line of lines(TONAL_MATCHED)) {
+    if (first) { first = false; continue; }
+    const [mbid, key_key, key_scale, tuning_freq] = line.split(',');
+    if (!mbid) continue;
+    const d: AcousticData = { key_key: key_key || undefined, key_scale: key_scale || undefined, tuning_freq: parseNum(tuning_freq) };
+    const e = merged.get(mbid);
+    e ? Object.assign(e, d) : merged.set(mbid, d);
+  }
 
-  return `UPDATE tracks SET\n  ${sets}\nWHERE mb_id IN (${mbids})`;
+  // lowlevel_matched: mb_id, loudness, dynamic_complexity
+  first = true;
+  for await (const line of lines(LOWLEVEL_MATCHED)) {
+    if (first) { first = false; continue; }
+    const [mbid, loudness, dynamic_complexity] = line.split(',');
+    if (!mbid) continue;
+    const d: AcousticData = { loudness: parseNum(loudness), dynamic_complexity: parseNum(dynamic_complexity) };
+    const e = merged.get(mbid);
+    e ? Object.assign(e, d) : merged.set(mbid, d);
+  }
+
+  // Write merged.csv
+  const writer = fs.createWriteStream(MERGED_FILE, { encoding: 'utf8' });
+  writer.write('mb_id,bpm,danceability,key_key,key_scale,tuning_freq,loudness,dynamic_complexity\n');
+  for (const [mbid, d] of merged)
+    writer.write(`${mbid},${n(d.bpm)},${n(d.danceability)},${s(d.key_key)},${s(d.key_scale)},${n(d.tuning_freq)},${n(d.loudness)},${n(d.dynamic_complexity)}\n`);
+  await endStream(writer);
+  return merged.size;
 }
 
-// ── Progress bar ───────────────────────────────────────────────────────────────
+// ── Phase B-2: stream merged.csv → D1 ─────────────────────────────────────────
 
 function fmtEta(sec: number): string {
   if (!isFinite(sec) || sec <= 0) return '--';
-  const h = Math.floor(sec / 3600);
-  const m = Math.floor((sec % 3600) / 60);
-  const s = Math.round(sec % 60);
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), ss = Math.round(sec % 60);
   if (h > 0) return `${h}h ${m}m`;
-  if (m > 0) return `${m}m ${s}s`;
-  return `${s}s`;
+  if (m > 0) return `${m}m ${ss}s`;
+  return `${ss}s`;
 }
 
 function renderBar(current: number, total: number, startMs: number): void {
-  const pct     = total > 0 ? current / total : 0;
-  const filled  = Math.round(pct * BAR_WIDTH);
-  const bar     = '█'.repeat(filled) + '░'.repeat(BAR_WIDTH - filled);
+  const pct    = total > 0 ? current / total : 0;
+  const filled = Math.round(pct * BAR_WIDTH);
+  const bar    = '█'.repeat(filled) + '░'.repeat(BAR_WIDTH - filled);
   const elapsed = (Date.now() - startMs) / 1000;
   const rate    = elapsed > 0 ? current / elapsed : 0;
   const etaSec  = rate > 0 ? (total - current) / rate : 0;
   process.stdout.write(
-    `\r  [${bar}] ${Math.round(pct * 100)}%  ${current.toLocaleString()} rows  ETA: ${fmtEta(etaSec)}   `,
+    `\r  [${bar}] ${Math.round(pct * 100)}%  ${current.toLocaleString()}/${total.toLocaleString()} rows  ETA: ${fmtEta(etaSec)}   `,
   );
+}
+
+function buildBatchSql(mbids: string[], rows: AcousticData[]): string {
+  function numCase(col: keyof AcousticData): string {
+    const items = mbids.map((id, i) => [id, rows[i][col] as number | undefined] as const).filter(([, v]) => v !== undefined);
+    if (!items.length) return `${col} = ${col}`;
+    return `${col} = CASE mb_id ${items.map(([id, v]) => `WHEN ${sq(id)} THEN ${v}`).join(' ')} ELSE ${col} END`;
+  }
+  function strCase(col: keyof AcousticData): string {
+    const items = mbids.map((id, i) => [id, rows[i][col] as string | undefined] as const).filter(([, v]) => v);
+    if (!items.length) return `${col} = ${col}`;
+    return `${col} = CASE mb_id ${items.map(([id, v]) => `WHEN ${sq(id)} THEN ${sq(v!)}`).join(' ')} ELSE ${col} END`;
+  }
+  const inList = mbids.map(sq).join(',');
+  return `UPDATE tracks SET\n  ${[
+    numCase('bpm'), numCase('danceability'),
+    strCase('key_key'), strCase('key_scale'),
+    numCase('tuning_freq'), numCase('loudness'), numCase('dynamic_complexity'),
+  ].join(',\n  ')}\nWHERE mb_id IN (${inList})`;
+}
+
+async function writeToD1(totalRows: number): Promise<{ updated: number; errors: number }> {
+  let updated = 0, errors = 0;
+  const startMs = Date.now();
+  const active  = new Map<symbol, Promise<void>>();
+  let batchIds: string[] = [], batchRows: AcousticData[] = [];
+
+  async function flush() {
+    if (!batchIds.length) return;
+    const ids = batchIds, rows = batchRows;
+    batchIds = []; batchRows = [];
+    const sql = buildBatchSql(ids, rows);
+    const key = Symbol();
+    const p = d1Raw(sql)
+      .then(() => { updated += ids.length; renderBar(updated, totalRows, startMs); })
+      .catch((err: unknown) => {
+        errors++;
+        if (errors <= 3) console.error('\n  Batch error:', err instanceof Error ? err.message.slice(0, 400) : String(err).slice(0, 400));
+      })
+      .finally(() => active.delete(key));
+    active.set(key, p);
+    if (active.size >= WRITE_CONC) await Promise.race(active.values());
+  }
+
+  let first = true;
+  for await (const line of lines(MERGED_FILE)) {
+    if (first) { first = false; continue; }
+    const [mbid, bpm, danceability, key_key, key_scale, tuning_freq, loudness, dynamic_complexity] = line.split(',');
+    if (!mbid) continue;
+    batchIds.push(mbid);
+    batchRows.push({
+      bpm:                parseNum(bpm),
+      danceability:       parseNum(danceability),
+      key_key:            key_key   || undefined,
+      key_scale:          key_scale || undefined,
+      tuning_freq:        parseNum(tuning_freq),
+      loudness:           parseNum(loudness),
+      dynamic_complexity: parseNum(dynamic_complexity),
+    });
+    if (batchIds.length >= ROWS_PER_BATCH) await flush();
+  }
+  await flush();
+  await Promise.all(active.values());
+  return { updated, errors };
 }
 
 // ── Main ───────────────────────────────────────────────────────────────────────
@@ -349,108 +430,72 @@ async function main() {
     console.error('Missing Cloudflare credentials in .env.local'); process.exit(1);
   }
 
-  const rhythmFile   = path.join(AB_PATH, 'rhythm.csv');
-  const tonalFile    = path.join(AB_PATH, 'tonal.csv');
-  const lowlevelFile = path.join(AB_PATH, 'lowlevel.csv');
-
-  for (const [label, fp] of [['rhythm.csv', rhythmFile], ['tonal.csv', tonalFile], ['lowlevel.csv', lowlevelFile]] as const) {
-    if (!fs.existsSync(fp)) {
-      console.error(`Missing: ${fp}`);
-      console.error(`Download the CSV dumps from acousticbrainz.org/download and place them in ${AB_PATH}`);
-      process.exit(1);
-    }
-  }
-
   console.log('AcousticBrainz Enrichment');
   console.log(`  CSV path:    ${AB_PATH}`);
   console.log(`  Batch size:  ${ROWS_PER_BATCH} rows/statement`);
   console.log(`  Concurrency: ${WRITE_CONC} parallel D1 writes`);
   console.log('');
 
-  // ── Phase 1: load our mb_ids ────────────────────────────────────────────────
-  console.log('Phase 1 — loading our mb_ids from D1');
-  const ourMbIds = await loadOurMbIds();
-  console.log('');
+  // ── Phase A: build merged.csv ──────────────────────────────────────────────
+  if (fs.existsSync(MERGED_FILE) && !REBUILD) {
+    const rows = fs.statSync(MERGED_FILE).size;
+    console.log(`Phase A — skipped (merged.csv exists, ${(rows / 1e6).toFixed(0)} MB)`);
+    console.log('  Pass --rebuild to regenerate from source CSVs.\n');
+  } else {
+    for (const fp of [RHYTHM_SRC, TONAL_SRC, LOWLEVEL_SRC]) {
+      if (!fs.existsSync(fp)) {
+        console.error(`Missing: ${fp}`); process.exit(1);
+      }
+    }
 
-  // ── Phase 2: stream CSVs ────────────────────────────────────────────────────
-  console.log('Phase 2 — streaming AcousticBrainz CSV files');
-  const rhythmMap   = await streamRhythm(rhythmFile,     ourMbIds);
-  const tonalMap    = await streamTonal(tonalFile,       ourMbIds);
-  const lowMap      = await streamLowlevel(lowlevelFile, ourMbIds);
+    console.log('Phase A-1 — loading mb_ids');
+    const filter = await loadOurMbIds();
+    console.log('');
 
-  // ── Phase 3: merge ──────────────────────────────────────────────────────────
-  console.log('');
-  console.log('Phase 3 — merging results');
-  const merged = mergeMaps(rhythmMap, tonalMap, lowMap);
-  rhythmMap.clear(); tonalMap.clear(); lowMap.clear();
-  console.log(`  ${merged.size.toLocaleString()} unique tracks with at least one AcousticBrainz field`);
-  console.log(`  Coverage: ${((merged.size / ourMbIds.size) * 100).toFixed(1)}% of our catalog`);
-  ourMbIds.clear();
-  console.log('');
+    console.log('Phase A-2 — streaming source CSV files → intermediate matched files');
+    await streamRhythm(filter);
+    await streamTonal(filter);
+    await streamLowlevel(filter);
+    filter.clear();   // ← free 800 MB before merge
+    console.log('');
 
-  if (merged.size === 0) {
-    console.log('No matches found — check that the CSV files are in the right directory.');
-    return;
+    console.log('Phase A-3 — merging matched files → merged.csv');
+    const total = await buildMergedCsv();
+    console.log(`  ${total.toLocaleString()} unique tracks written to merged.csv\n`);
   }
 
-  // ── Phase 4: schema ─────────────────────────────────────────────────────────
-  console.log('Phase 4 — ensuring schema columns exist');
-  const newCols = [
-    'ALTER TABLE tracks ADD COLUMN bpm               REAL',
-    'ALTER TABLE tracks ADD COLUMN danceability      REAL',
-    'ALTER TABLE tracks ADD COLUMN key_key           TEXT',
-    'ALTER TABLE tracks ADD COLUMN key_scale         TEXT',
-    'ALTER TABLE tracks ADD COLUMN tuning_freq       REAL',
-    'ALTER TABLE tracks ADD COLUMN loudness          REAL',
+  // ── Phase B: schema + D1 writes ────────────────────────────────────────────
+  console.log('Phase B-1 — ensuring schema columns exist');
+  for (const sql of [
+    'ALTER TABLE tracks ADD COLUMN bpm                REAL',
+    'ALTER TABLE tracks ADD COLUMN danceability       REAL',
+    'ALTER TABLE tracks ADD COLUMN key_key            TEXT',
+    'ALTER TABLE tracks ADD COLUMN key_scale          TEXT',
+    'ALTER TABLE tracks ADD COLUMN tuning_freq        REAL',
+    'ALTER TABLE tracks ADD COLUMN loudness           REAL',
     'ALTER TABLE tracks ADD COLUMN dynamic_complexity REAL',
-  ];
-  for (const sql of newCols) {
+  ]) {
     const col = sql.match(/ADD COLUMN (\S+)/)![1];
-    try   { await d1Raw(sql); console.log(`  ✓ added ${col}`); }
+    try   { await d1Raw(sql); console.log(`  added ${col}`); }
     catch { console.log(`  (exists) ${col}`); }
   }
   console.log('');
 
-  // ── Phase 5: batch UPDATE D1 ────────────────────────────────────────────────
-  const totalRows = merged.size;
-  console.log(`Phase 5 — writing ${totalRows.toLocaleString()} rows to D1`);
+  // Count rows for progress bar
+  let totalRows = 0;
+  for await (const _ of lines(MERGED_FILE)) totalRows++;
+  totalRows--; // subtract header
 
-  const entries  = [...merged.entries()];
-  let updated    = 0;
-  let errors     = 0;
-  const startMs  = Date.now();
-
-  const tasks: Array<() => Promise<void>> = [];
-  for (let i = 0; i < entries.length; i += ROWS_PER_BATCH) {
-    const chunk = entries.slice(i, i + ROWS_PER_BATCH);
-    tasks.push(async () => {
-      try {
-        await d1Raw(buildBatchUpdate(chunk));
-        updated += chunk.length;
-      } catch (err) {
-        errors++;
-        if (errors <= 5) console.error('\n  Batch error:', (err as Error).message.slice(0, 200));
-      }
-      renderBar(updated, totalRows, startMs);
-    });
-  }
-
-  // Drain in groups of WRITE_CONC, rendering bar after each group
-  for (let i = 0; i < tasks.length; i += WRITE_CONC) {
-    await runConcurrent(tasks.slice(i, i + WRITE_CONC), WRITE_CONC);
-  }
-
-  renderBar(updated, totalRows, startMs);
+  console.log(`Phase B-2 — writing ${totalRows.toLocaleString()} rows to D1`);
+  const writeStart = Date.now();
+  const { updated, errors } = await writeToD1(totalRows);
   process.stdout.write('\n');
 
-  const elapsed = ((Date.now() - startMs) / 1000).toFixed(0);
-  console.log('');
-  console.log(`  Done in ${elapsed}s`);
-  console.log(`  ${updated.toLocaleString()} rows updated · ${errors} errors`);
-  console.log('');
-  console.log('All done!');
-  console.log('  FTS index unchanged — new columns are not FTS-indexed.');
-  console.log('  Run "npx wrangler deploy" in worker/ to expose the new fields.');
+  const elapsed = ((Date.now() - writeStart) / 1000).toFixed(0);
+  console.log(`\n  Done in ${elapsed}s`);
+  console.log(`  ${updated.toLocaleString()} rows updated · ${errors} errors\n`);
+  console.log('New columns: bpm, danceability, key_key, key_scale, tuning_freq, loudness, dynamic_complexity');
+  console.log('Wire up worker and UI when ready.');
 }
 
 main().catch(err => { console.error(err); process.exit(1); });

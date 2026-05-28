@@ -80,6 +80,43 @@ export default function TrackCard({ track, exactDuration, tolerance = 0 }: Track
             </span>
           ))}
         </div>
+
+        {/* AcousticBrainz audio properties */}
+        {(track.bpm != null || track.key_key != null || track.loudness != null ||
+          track.danceability != null || track.tuning_freq != null || track.dynamic_complexity != null) && (
+          <div className="flex items-center gap-1 mt-1 flex-wrap">
+            {track.bpm != null && (
+              <span className="text-xs text-indigo-500 bg-indigo-50 px-1.5 py-0.5 rounded-full flex-shrink-0">
+                {Math.round(track.bpm)} BPM
+              </span>
+            )}
+            {track.key_key != null && track.key_scale != null && (
+              <span className="text-xs text-indigo-500 bg-indigo-50 px-1.5 py-0.5 rounded-full flex-shrink-0">
+                {track.key_key} {track.key_scale}
+              </span>
+            )}
+            {track.loudness != null && (
+              <span className="text-xs text-indigo-500 bg-indigo-50 px-1.5 py-0.5 rounded-full flex-shrink-0">
+                {track.loudness.toFixed(1)} dB
+              </span>
+            )}
+            {track.danceability != null && (
+              <span className="text-xs text-indigo-500 bg-indigo-50 px-1.5 py-0.5 rounded-full flex-shrink-0">
+                Dance {Math.round((track.danceability / 3) * 100)}%
+              </span>
+            )}
+            {track.tuning_freq != null && (
+              <span className="text-xs text-indigo-500 bg-indigo-50 px-1.5 py-0.5 rounded-full flex-shrink-0">
+                {Math.round(track.tuning_freq)} Hz
+              </span>
+            )}
+            {track.dynamic_complexity != null && (
+              <span className="text-xs text-indigo-500 bg-indigo-50 px-1.5 py-0.5 rounded-full flex-shrink-0">
+                Dyn {track.dynamic_complexity.toFixed(1)}
+              </span>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Popularity dot — only shown once enriched */}

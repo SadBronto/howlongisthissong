@@ -17,7 +17,8 @@
     "enrich-popularity": "tsx scripts/enrich-popularity.ts",
     "enrich-artist-data": "tsx scripts/enrich-artist-data.ts",
     "fix-durations": "tsx scripts/fix-durations.ts",
-    "enrich-acousticbrainz": "tsx scripts/enrich-acousticbrainz.ts"
+    "fix-durations-mb": "tsx scripts/fix-durations-mb.ts",
+    "enrich-acousticbrainz": "set NODE_OPTIONS=--max-old-space-size=8192 && tsx scripts/enrich-acousticbrainz.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.4",

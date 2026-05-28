@@ -23,7 +23,9 @@ const JOINED_COLS = `
   t.disambiguation AS version, t.isrc, t.release_year, t.mb_id,
   t.genre, t.popularity, t.popularity_source, t.search_count,
   t.release_type, t.label, t.track_number,
-  t.artist_type, t.artist_gender, t.artist_country, t.language
+  t.artist_type, t.artist_gender, t.artist_country, t.language,
+  t.bpm, t.danceability, t.key_key, t.key_scale,
+  t.tuning_freq, t.loudness, t.dynamic_complexity
 `;
 
 const DIRECT_COLS = `
@@ -31,20 +33,29 @@ const DIRECT_COLS = `
   disambiguation AS version, isrc, release_year, mb_id,
   genre, popularity, popularity_source, search_count,
   release_type, label, track_number,
-  artist_type, artist_gender, artist_country, language
+  artist_type, artist_gender, artist_country, language,
+  bpm, danceability, key_key, key_scale,
+  tuning_freq, loudness, dynamic_complexity
 `;
 
 // ── MusicBrainz genre enrichment ──────────────────────────────────────────────
 
 interface TrackRow {
-  id:               number;
-  mb_id:            string | null;
-  isrc:             string | null;
-  popularity:       number | null;
-  popularity_source: string | null;
-  search_count:     number;
-  genre:            string | null;
-  [key: string]:    unknown;
+  id:                 number;
+  mb_id:              string | null;
+  isrc:               string | null;
+  popularity:         number | null;
+  popularity_source:  string | null;
+  search_count:       number;
+  genre:              string | null;
+  bpm:                number | null;
+  danceability:       number | null;
+  key_key:            string | null;
+  key_scale:          string | null;
+  tuning_freq:        number | null;
+  loudness:           number | null;
+  dynamic_complexity: number | null;
+  [key: string]:      unknown;
 }
 
 async function enrichGenre(tracks: TrackRow[], env: Env): Promise<void> {
