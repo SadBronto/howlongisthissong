@@ -36,7 +36,7 @@ const DATABASE_ID = process.env.CLOUDFLARE_D1_DATABASE_ID!;
 const LASTFM_KEY  = process.env.LASTFM_API_KEY ?? '';
 
 const MANUAL_FILE = path.join(process.cwd(), 'fix_durations_manual.tsv');
-const BAR_WIDTH   = 40;
+const BAR_WIDTH   = 32;
 
 // ── D1 helpers ─────────────────────────────────────────────────────────────────
 
@@ -132,23 +132,18 @@ function fmtEta(sec: number): string {
   if (!isFinite(sec) || sec <= 0) return '--';
   const m = Math.floor(sec / 60);
   const s = Math.round(sec % 60);
-  return m > 0 ? `${m}m${s}s` : `${s}s`;
+  return m > 0 ? `${m}m ${s}s` : `${s}s`;
 }
 
-function renderBar(
-  done: number, total: number, startMs: number,
-  s: { itunes: number; lastfm: number; confirmed: number; manual: number },
-): void {
-  const pct    = total > 0 ? done / total : 0;
-  const filled = Math.round(pct * BAR_WIDTH);
-  const bar    = '█'.repeat(filled) + '░'.repeat(BAR_WIDTH - filled);
+function renderBar(done: number, total: number, startMs: number): void {
+  const pct     = total > 0 ? done / total : 0;
+  const filled  = Math.round(pct * BAR_WIDTH);
+  const bar     = '█'.repeat(filled) + '░'.repeat(BAR_WIDTH - filled);
   const elapsed = (Date.now() - startMs) / 1000;
-  const rate   = elapsed > 0 ? done / elapsed : 0;
-  const eta    = rate > 0 ? (total - done) / rate : 0;
+  const rate    = elapsed > 0 ? done / elapsed : 0;
+  const etaSec  = rate > 0 ? (total - done) / rate : 0;
   process.stdout.write(
-    `\r  [${bar}] ${Math.round(pct * 100)}%  ${done}/${total}` +
-    `  iTunes:${s.itunes} LFM:${s.lastfm} OK:${s.confirmed} Manual:${s.manual}` +
-    `  ETA:${fmtEta(eta)}   `,
+    `\r  [${bar}] ${Math.round(pct * 100)}%  ${done.toLocaleString()}/${total.toLocaleString()} tracks  ETA: ${fmtEta(etaSec)}   `,
   );
 }
 
@@ -192,7 +187,7 @@ async function main() {
     const { mb_id, title, artist, duration_ms } = tracks[i];
     const art = artist ?? '';
 
-    renderBar(i, tracks.length, startMs, stats);
+    renderBar(i, tracks.length, startMs);
 
     // ── 1. iTunes ──────────────────────────────────────────────────────────────
     const itunesMs = await tryItunes(title, art);
@@ -229,7 +224,7 @@ async function main() {
     stats.manual++;
   }
 
-  renderBar(tracks.length, tracks.length, startMs, stats);
+  renderBar(tracks.length, tracks.length, startMs);
   process.stdout.write('\n');
   await new Promise<void>((res, rej) => manual.end(err => err ? rej(err) : res()));
 

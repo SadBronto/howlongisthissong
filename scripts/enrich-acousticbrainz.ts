@@ -60,7 +60,7 @@ const ROWS_PER_BATCH = 200;
 const WRITE_CONC     = 8;
 const LOAD_CONC      = 20;
 const ID_RANGE       = 10_000;
-const BAR_WIDTH      = 40;
+const BAR_WIDTH      = 32;
 
 const D1_URL = `https://api.cloudflare.com/client/v4/accounts/${ACCOUNT_ID}/d1/database/${DATABASE_ID}`;
 
@@ -325,22 +325,20 @@ function fmtEta(sec: number): string {
   const h = Math.floor(sec / 3600);
   const m = Math.floor((sec % 3600) / 60);
   const s = Math.round(sec % 60);
-  if (h > 0) return `${h}h${m}m`;
-  if (m > 0) return `${m}m${s}s`;
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m ${s}s`;
   return `${s}s`;
 }
 
-function renderBar(current: number, total: number, startMs: number, errors: number): void {
-  const pct    = total > 0 ? current / total : 0;
-  const filled = Math.round(pct * BAR_WIDTH);
-  const bar    = '█'.repeat(filled) + '░'.repeat(BAR_WIDTH - filled);
+function renderBar(current: number, total: number, startMs: number): void {
+  const pct     = total > 0 ? current / total : 0;
+  const filled  = Math.round(pct * BAR_WIDTH);
+  const bar     = '█'.repeat(filled) + '░'.repeat(BAR_WIDTH - filled);
   const elapsed = (Date.now() - startMs) / 1000;
-  const rate   = elapsed > 0 ? current / elapsed : 0;
-  const eta    = rate > 0 ? (total - current) / rate : 0;
-  const errTag = errors > 0 ? `  ⚠ ${errors} err` : '';
+  const rate    = elapsed > 0 ? current / elapsed : 0;
+  const etaSec  = rate > 0 ? (total - current) / rate : 0;
   process.stdout.write(
-    `\r  [${bar}] ${Math.round(pct * 100)}%  ${current.toLocaleString()}/${total.toLocaleString()}` +
-    `  ${Math.round(rate)}/s  ETA:${fmtEta(eta)}${errTag}   `,
+    `\r  [${bar}] ${Math.round(pct * 100)}%  ${current.toLocaleString()} rows  ETA: ${fmtEta(etaSec)}   `,
   );
 }
 
@@ -433,7 +431,7 @@ async function main() {
         errors++;
         if (errors <= 5) console.error('\n  Batch error:', (err as Error).message.slice(0, 200));
       }
-      renderBar(updated, totalRows, startMs, errors);
+      renderBar(updated, totalRows, startMs);
     });
   }
 
@@ -442,7 +440,7 @@ async function main() {
     await runConcurrent(tasks.slice(i, i + WRITE_CONC), WRITE_CONC);
   }
 
-  renderBar(updated, totalRows, startMs, errors);
+  renderBar(updated, totalRows, startMs);
   process.stdout.write('\n');
 
   const elapsed = ((Date.now() - startMs) / 1000).toFixed(0);
