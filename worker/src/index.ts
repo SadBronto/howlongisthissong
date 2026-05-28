@@ -2,8 +2,6 @@ import { parseQuery, exactDurationRange, sanitizeForFts } from './queryParser';
 
 export interface Env {
   DB: D1Database;
-  SPOTIFY_CLIENT_ID:     string;
-  SPOTIFY_CLIENT_SECRET: string;
 }
 
 const CORS_HEADERS = {
@@ -22,198 +20,29 @@ function json(data: unknown, status = 200) {
 const JOINED_COLS = `
   t.id, t.title, t.artist, t.album, t.duration_ms,
   t.disambiguation AS version, t.isrc, t.release_year, t.mb_id,
-  t.genre, t.popularity, t.release_type, t.label, t.track_number
+  t.genre, t.popularity, t.popularity_source, t.search_count,
+  t.release_type, t.label, t.track_number
 `;
 
 const DIRECT_COLS = `
   id, title, artist, album, duration_ms,
   disambiguation AS version, isrc, release_year, mb_id,
-  genre, popularity, release_type, label, track_number
+  genre, popularity, popularity_source, search_count,
+  release_type, label, track_number
 `;
 
-// ── Utility ───────────────────────────────────────────────────────────────────
-
-function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | null> {
-  return Promise.race([
-    p,
-    new Promise<null>(r => setTimeout(() => r(null), ms)),
-  ]);
-}
-
-// ── Spotify circuit breaker + logging ─────────────────────────────────────────
-
-// Circuit states:
-//   'open'      – running normally
-//   'half_open' – backoff elapsed, attempting cautious resume
-//   'closed'    – backed off, skipping until backoff_until elapses
-
-async function getConfig(db: D1Database, key: string): Promise<string | null> {
-  const row = await db.prepare('SELECT value FROM spotify_config WHERE key = ?')
-    .bind(key).first<{ value: string }>();
-  return row?.value ?? null;
-}
-
-async function setConfig(db: D1Database, key: string, value: string): Promise<void> {
-  await db.prepare(
-    'INSERT INTO spotify_config (key, value, updated) VALUES (?, ?, ?) ' +
-    'ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated = excluded.updated'
-  ).bind(key, value, Date.now()).run();
-}
-
-async function logRun(db: D1Database, source: string, stats: {
-  attempted: number; scored: number; notFound: number; err429: number; errOther: number;
-}): Promise<void> {
-  await db.prepare(
-    'INSERT INTO spotify_log (ts, source, attempted, scored, not_found, err_429, err_other) VALUES (?, ?, ?, ?, ?, ?, ?)'
-  ).bind(Date.now(), source, stats.attempted, stats.scored, stats.notFound, stats.err429, stats.errOther).run();
-  // Keep only the last 200 rows
-  await db.prepare(
-    'DELETE FROM spotify_log WHERE id NOT IN (SELECT id FROM spotify_log ORDER BY ts DESC LIMIT 200)'
-  ).run();
-}
-
-// Backoff schedule per consecutive 429 offense: 1→10m, 2→30m, 3→1h, 4+→6h
-function backoffMs(consecutive: number): number {
-  if (consecutive <= 1) return 10 * 60 * 1000;
-  if (consecutive === 2) return 30 * 60 * 1000;
-  if (consecutive === 3) return 60 * 60 * 1000;
-  return 6 * 60 * 60 * 1000;
-}
-
-async function checkCircuit(env: Env): Promise<'run' | 'skip'> {
-  const state = await getConfig(env.DB, 'circuit_state') ?? 'open';
-  if (state === 'open') return 'run';
-
-  const backoffUntilStr = await getConfig(env.DB, 'backoff_until');
-  if (backoffUntilStr && Date.now() < parseInt(backoffUntilStr)) {
-    const remaining = Math.round((parseInt(backoffUntilStr) - Date.now()) / 60000);
-    console.log(`Spotify circuit ${state} — ${remaining}m remaining on backoff, skipping`);
-    return 'skip';
-  }
-
-  // Backoff elapsed — cautious resume
-  await setConfig(env.DB, 'circuit_state', 'half_open');
-  console.log('Spotify circuit half_open — backoff elapsed, attempting resume');
-  return 'run';
-}
-
-async function updateCircuit(env: Env, stats: {
-  err429: number; errOther: number; scored: number; attempted: number;
-}): Promise<void> {
-  if (stats.err429 > 0) {
-    const consecutive = parseInt(await getConfig(env.DB, 'consecutive_429s') ?? '0') + 1;
-    const wait        = backoffMs(consecutive);
-    await setConfig(env.DB, 'consecutive_429s', String(consecutive));
-    await setConfig(env.DB, 'backoff_until',    String(Date.now() + wait));
-    await setConfig(env.DB, 'circuit_state',    'closed');
-    console.error(`Spotify 429 detected — circuit closed. Offense #${consecutive}, backing off ${wait / 60000}min`);
-  } else if (stats.attempted > 0 && stats.scored === 0 && stats.errOther >= stats.attempted) {
-    // Every single lookup failed — likely auth issue or Spotify outage
-    await setConfig(env.DB, 'circuit_state',    'closed');
-    await setConfig(env.DB, 'backoff_until',    String(Date.now() + 60 * 60 * 1000)); // 1h
-    await setConfig(env.DB, 'consecutive_429s', '0');
-    console.error('Spotify all-errors run — circuit closed 1h (possible auth failure or outage)');
-  } else {
-    // Clean run — open circuit and reset counter
-    await setConfig(env.DB, 'circuit_state',    'open');
-    await setConfig(env.DB, 'consecutive_429s', '0');
-  }
-}
-
-// ── Spotify ───────────────────────────────────────────────────────────────────
-
-async function getSpotifyToken(env: Env): Promise<string | null> {
-  try {
-    const creds = btoa(`${env.SPOTIFY_CLIENT_ID}:${env.SPOTIFY_CLIENT_SECRET}`);
-    const res = await fetch('https://accounts.spotify.com/api/token', {
-      method: 'POST',
-      headers: {
-        'Authorization':  `Basic ${creds}`,
-        'Content-Type':   'application/x-www-form-urlencoded',
-      },
-      body: 'grant_type=client_credentials',
-    });
-    if (!res.ok) return null;
-    const data = await res.json() as { access_token: string };
-    return data.access_token;
-  } catch {
-    return null;
-  }
-}
-
-interface LookupResult {
-  pop:     number | null;  // null = error; -1 = not on Spotify; 0–100 = score
-  is429:   boolean;
-  isError: boolean;
-}
-
-async function spotifyLookup(isrc: string, token: string): Promise<LookupResult> {
-  try {
-    const res = await fetch(
-      `https://api.spotify.com/v1/search?q=isrc:${encodeURIComponent(isrc)}&type=track&limit=1`,
-      { headers: { 'Authorization': `Bearer ${token}` } }
-    );
-    if (res.status === 429) { res.body?.cancel(); return { pop: null, is429: true,  isError: false }; }
-    if (!res.ok)            { res.body?.cancel(); return { pop: null, is429: false, isError: true  }; }
-    const data  = await res.json() as { tracks: { items: Array<{ popularity: number }> } };
-    const items = data.tracks?.items;
-    if (!items || items.length === 0) return { pop: -1,         is429: false, isError: false };
-    return                                   { pop: items[0].popularity ?? 0, is429: false, isError: false };
-  } catch {
-    return { pop: null, is429: false, isError: true };
-  }
-}
+// ── MusicBrainz genre enrichment ──────────────────────────────────────────────
 
 interface TrackRow {
-  mb_id:      string | null;
-  isrc:       string | null;
-  popularity: number | null;
-  genre:      string | null;
-  [key: string]: unknown;
+  id:               number;
+  mb_id:            string | null;
+  isrc:             string | null;
+  popularity:       number | null;
+  popularity_source: string | null;
+  search_count:     number;
+  genre:            string | null;
+  [key: string]:    unknown;
 }
-
-interface EnrichStats {
-  attempted: number;
-  scored:    number;
-  notFound:  number;
-  err429:    number;
-  errOther:  number;
-}
-
-async function enrichWithSpotify(
-  tracks:    TrackRow[],
-  token:     string,
-  env:       Env,
-  batchSize: number,
-  delayMs:   number,
-): Promise<EnrichStats> {
-  const needs  = tracks.filter(t => t.isrc && t.popularity == null);
-  const stats: EnrichStats = { attempted: needs.length, scored: 0, notFound: 0, err429: 0, errOther: 0 };
-
-  for (let i = 0; i < needs.length; i += batchSize) {
-    const batch = needs.slice(i, i + batchSize);
-    await Promise.all(batch.map(async t => {
-      const r = await spotifyLookup(t.isrc!, token);
-      if (r.is429)   { stats.err429++;  return; }
-      if (r.isError) { stats.errOther++; return; }
-      if (r.pop === null) return;
-      if (r.pop === -1)   { stats.notFound++; t.popularity = -1; }
-      else                { stats.scored++;   t.popularity = r.pop; }
-      env.DB.prepare('UPDATE tracks SET popularity = ? WHERE mb_id = ?')
-        .bind(r.pop, t.mb_id).run().catch(() => {});
-    }));
-
-    if (stats.err429 > 0) break; // stop immediately on rate limit
-
-    if (delayMs > 0 && i + batchSize < needs.length) {
-      await new Promise(r => setTimeout(r, delayMs));
-    }
-  }
-
-  return stats;
-}
-
-// ── MusicBrainz genre enrichment ──────────────────────────────────────────────
 
 async function enrichGenre(tracks: TrackRow[], env: Env): Promise<void> {
   const needs = tracks.filter(t => t.mb_id && t.genre == null).slice(0, 5);
@@ -261,13 +90,19 @@ function buildFilterClauses(f: Filters, alias: string): { sql: string; params: u
   return { sql: conds.length ? ' AND ' + conds.join(' AND ') : '', params: vals };
 }
 
+// Relevance order:
+//   Scored tracks (popularity > 0) sort by their Last.fm / ListenBrainz score (1–100).
+//   Unscored tracks fall back to a search_count-derived floor capped at 30,
+//   so they can never outrank a properly scored track but still have some ordering.
+//   Within score ties, FTS rank or duration_ms breaks the tie.
 function buildOrderBy(sort: string, fts: boolean): string {
   const p = fts ? 't.' : '';
   if (sort === 'asc')  return `ORDER BY ${p}duration_ms ASC`;
   if (sort === 'desc') return `ORDER BY ${p}duration_ms DESC`;
+  const scoreExpr = `CASE WHEN ${p}popularity > 0 THEN ${p}popularity ELSE MIN(CAST(${p}search_count * 10 AS INTEGER), 30) END`;
   return fts
-    ? 'ORDER BY COALESCE(t.popularity, -2) DESC, tracks_fts.rank'
-    : 'ORDER BY COALESCE(popularity, -2) DESC, duration_ms';
+    ? `ORDER BY ${scoreExpr} DESC, tracks_fts.rank`
+    : `ORDER BY ${scoreExpr} DESC, duration_ms`;
 }
 
 function buildDurationClause(alias: string, minDuration: number | null, maxDuration: number | null): { sql: string; params: unknown[] } {
@@ -290,26 +125,20 @@ export default {
 
     const url = new URL(request.url);
 
-    // ── /status — Spotify health check ───────────────────────────────────────
+    // ── /status — enrichment progress ────────────────────────────────────────
     if (url.pathname === '/status') {
-      const [configRows, logRows] = await Promise.all([
-        env.DB.prepare('SELECT key, value, updated FROM spotify_config ORDER BY key').all(),
-        env.DB.prepare('SELECT * FROM spotify_log ORDER BY ts DESC LIMIT 50').all(),
+      const [total, bySource] = await Promise.all([
+        env.DB.prepare('SELECT COUNT(*) as n FROM tracks').first<{ n: number }>(),
+        env.DB.prepare(
+          `SELECT COALESCE(popularity_source, 'unscored') AS src, COUNT(*) as n ` +
+          `FROM tracks GROUP BY src`
+        ).all(),
       ]);
-      const config: Record<string, string> = {};
-      for (const row of (configRows.results ?? []) as { key: string; value: string }[]) {
-        config[row.key] = row.value;
+      const sources: Record<string, number> = {};
+      for (const row of (bySource.results ?? []) as { src: string; n: number }[]) {
+        sources[row.src] = row.n;
       }
-      const backoffUntil = config['backoff_until'] ? parseInt(config['backoff_until']) : null;
-      const backingOff   = backoffUntil != null && Date.now() < backoffUntil;
-      return json({
-        circuit:              config['circuit_state'] ?? 'open',
-        consecutive429s:      parseInt(config['consecutive_429s'] ?? '0'),
-        backingOff,
-        backoffUntil:         backoffUntil ? new Date(backoffUntil).toISOString() : null,
-        backoffRemainingMin:  backingOff ? Math.round((backoffUntil! - Date.now()) / 60000) : 0,
-        recentRuns:           logRows.results ?? [],
-      });
+      return json({ total: total?.n ?? 0, bySource: sources });
     }
 
     if (url.pathname !== '/search') return json({ error: 'Not found' }, 404);
@@ -435,28 +264,25 @@ export default {
       const totalCapped = rawCount > 10000;
       const total       = Math.min(rawCount, 10000);
 
-      // ── Inline Spotify enrichment — circuit breaker aware ─────────────────
-      if ((hasKeywords || hasFilters) && tracks.length > 0 && env.SPOTIFY_CLIENT_ID) {
-        const state       = await getConfig(env.DB, 'circuit_state') ?? 'open';
-        const backoffStr  = await getConfig(env.DB, 'backoff_until');
-        const circuitOpen = state === 'open' ||
-          (state !== 'open' && backoffStr != null && Date.now() >= parseInt(backoffStr));
+      // ── search_count: credit unscored tracks for appearing in this result set ─
+      // credit = 1/rawCount so broad searches (10,000 results) give tiny credit (0.0001)
+      // and narrow searches (4 results) give meaningful credit (0.25).
+      // Cap at 30 in ORDER BY so search_count can never outrank an externally scored track.
+      if (rawCount > 0) {
+        const unscoredIds = tracks
+          .filter(t => t.popularity_source == null || t.popularity_source === 'unfound')
+          .map(t => t.id);
 
-        if (circuitOpen) {
-          const token = await withTimeout(getSpotifyToken(env), 800);
-          if (token) {
-            const inline = tracks.filter(t => t.isrc && t.popularity == null).slice(0, 8);
-            if (inline.length > 0) {
-              const stats = await withTimeout(enrichWithSpotify(inline, token, env, 4, 0), 700) as EnrichStats | null;
-              if (stats) {
-                ctx.waitUntil(logRun(env.DB, 'inline', stats));
-                if (stats.err429 > 0) ctx.waitUntil(updateCircuit(env, stats));
-              }
-            }
-            if (sort === 'relevance') {
-              tracks.sort((a, b) => (b.popularity ?? -2) - (a.popularity ?? -2));
-            }
-          }
+        if (unscoredIds.length > 0) {
+          const credit = 1 / rawCount;
+          const idList = unscoredIds.join(',');
+          ctx.waitUntil(
+            env.DB.prepare(
+              `UPDATE tracks SET search_count = search_count + ? ` +
+              `WHERE id IN (${idList}) ` +
+              `AND (popularity_source IS NULL OR popularity_source = 'unfound')`
+            ).bind(credit).run().catch(() => {})
+          );
         }
       }
 
@@ -486,42 +312,5 @@ export default {
       console.error('Search error:', err);
       return json({ error: 'Search failed' }, 500);
     }
-  },
-
-  // ── Cron: background Spotify enrichment ──────────────────────────────────────
-
-  async scheduled(_event: ScheduledEvent, env: Env, _ctx: ExecutionContext): Promise<void> {
-    if (!env.SPOTIFY_CLIENT_ID) return;
-
-    const decision = await checkCircuit(env);
-    if (decision === 'skip') return;
-
-    const token = await getSpotifyToken(env);
-    if (!token) {
-      console.error('Cron: failed to get Spotify token');
-      const stats = { attempted: 0, scored: 0, notFound: 0, err429: 0, errOther: 1 };
-      await logRun(env.DB, 'cron', stats);
-      await updateCircuit(env, { ...stats, attempted: 1 });
-      return;
-    }
-
-    const result = await env.DB.prepare(`
-      SELECT mb_id, isrc, popularity, genre
-      FROM tracks
-      WHERE isrc IS NOT NULL AND popularity IS NULL
-      LIMIT 1000
-    `).all();
-
-    const tracks = (result.results ?? []) as TrackRow[];
-    if (tracks.length === 0) {
-      console.log('Cron: all ISRC tracks scored — nothing to do');
-      return;
-    }
-
-    console.log(`Cron: enriching ${tracks.length} tracks`);
-    const stats = await enrichWithSpotify(tracks, token, env, 4, 1000);
-    await logRun(env.DB, 'cron', stats);
-    await updateCircuit(env, stats);
-    console.log(`Cron: scored ${stats.scored} · not found ${stats.notFound} · 429s ${stats.err429} · errors ${stats.errOther}`);
   },
 };

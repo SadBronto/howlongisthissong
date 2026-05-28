@@ -12,8 +12,10 @@ export interface Track {
   source: string | null;
   mb_id: string | null;
   external_ids: Record<string, string>;
-  genre: string | null;       // top genre tag; null until enriched
-  popularity: number | null;  // Spotify score 0–100; -1 = not on Spotify; null = unchecked
+  genre: string | null;             // top genre tag; null until enriched
+  popularity: number | null;        // Last.fm/ListenBrainz score 0–100; null = unscored
+  popularity_source: string | null; // 'lastfm' | 'listenbrainz' | 'unfound' | null
+  search_count: number;             // fractional credit from site searches (organic floor signal)
   relevance?: number;
 }
 
