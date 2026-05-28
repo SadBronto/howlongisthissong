@@ -306,8 +306,8 @@ export default function SearchPage() {
   const handlePageChange = useCallback((pg: number) => {
     setPage(pg);
     doSearch(query, tolerance, filters, pg, perPage, sort);
-    router.replace(buildUrl(query, filters, pg, perPage, sort), { scroll: false });
     window.scrollTo({ top: 0, behavior: 'smooth' });
+    router.replace(buildUrl(query, filters, pg, perPage, sort), { scroll: false });
   }, [query, tolerance, filters, perPage, sort, doSearch, router]);
 
   const handlePerPageChange = useCallback((pp: number) => {
