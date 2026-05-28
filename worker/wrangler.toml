@@ -7,6 +7,5 @@ binding       = "DB"
 database_name = "howlongisthissong"
 database_id   = "c4fa886f-3387-4f3f-baa1-a2a56954b836"
 
-# cron disabled — pending decision on enrichment strategy
-# [triggers]
-# crons = ["* * * * *"]
+[triggers]
+crons = ["* * * * *"]
