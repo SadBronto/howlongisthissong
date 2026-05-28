@@ -71,14 +71,14 @@ export default function TrackCard({ track, exactDuration, tolerance = 0 }: Track
               <span className="text-gray-400 truncate">Label: {track.label}</span>
             </>
           )}
-          {track.genre && (
-            <>
-              <span className="text-gray-300 flex-shrink-0">·</span>
-              <span className="text-xs text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded-full flex-shrink-0">
-                {track.genre}
+          {track.genre && track.genre.split(', ').map(g => (
+            <span key={g} className="flex items-center gap-1 flex-shrink-0">
+              <span className="text-gray-300">·</span>
+              <span className="text-xs text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded-full">
+                {g}
               </span>
-            </>
-          )}
+            </span>
+          ))}
         </div>
       </div>
 

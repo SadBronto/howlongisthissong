@@ -4,13 +4,18 @@
  * Fills in album, release_year, release_type, label, track_number, genre
  * for all 5.7M tracks using local MusicBrainz dump files.
  *
- * Memory strategy: all lookup data is built in Maps (fits in ~1GB), then the
- * recording file is streamed once and enriched rows are written to a temp TSV
- * file on disk. The Maps are then freed, and the TSV is read in small batches
- * for D1 updates. Peak heap: ~1.3 GB (well under the 2.5 GB V8 limit).
+ * Genre strategy (cascading fallback):
+ *   1. Recording-level tags, filtered to MusicBrainz's curated genre list
+ *   2. Release-group tags if the recording has none
+ *   3. Artist tags if neither recording nor release group has genres
+ *   Up to 5 genres stored comma-separated, ordered by community vote count.
  *
- * Resumable: if enrich_temp.tsv already exists from a previous crashed run,
- * the data-load phase is skipped and the script jumps straight to D1 updates.
+ * Memory strategy: all lookup data is built in Maps (~1.5–2 GB peak), then the
+ * recording file is streamed once and enriched rows are written to a temp TSV
+ * file on disk. The Maps are freed before the D1 update phase begins.
+ *
+ * Resumable: if enrich_temp.tsv already exists, the data-load phase is skipped.
+ * Delete enrich_temp.tsv before re-running to get updated genre data.
  *
  * Usage: npm run enrich-d1
  */
@@ -27,9 +32,8 @@ const API_TOKEN   = process.env.CLOUDFLARE_API_TOKEN!;
 const DATABASE_ID = process.env.CLOUDFLARE_D1_DATABASE_ID!;
 const MBDUMP_PATH = process.env.MBDUMP_PATH ?? './mbdump';
 
-// Rows per UPDATE batch. Each batch is ONE SQL statement with CASE expressions.
-// ~200 rows keeps the request body well under D1's 1MB limit.
 const ROWS_PER_BATCH = 200;
+const MAX_GENRES     = 5;    // genres stored per track, sorted by vote count
 
 const TMP_FILE = path.join(process.cwd(), 'enrich_temp.tsv');
 
@@ -76,7 +80,51 @@ function nullInt(v: string): number | null {
   return isNaN(n) ? null : n;
 }
 
-// ── Step 0: Which recording integer IDs are in our DB (has an ISRC) ──────────
+// ── Genre accumulator helpers ─────────────────────────────────────────────────
+
+type TagScore = { name: string; count: number };
+
+function accumGenre(map: Map<number, TagScore[]>, id: number, name: string, count: number) {
+  const arr = map.get(id) ?? [];
+  arr.push({ name, count });
+  map.set(id, arr);
+}
+
+function finalizeGenres(acc: Map<number, TagScore[]>): Map<number, string> {
+  const result = new Map<number, string>();
+  acc.forEach((genres, id) => {
+    const str = genres
+      .sort((a, b) => b.count - a.count)
+      .slice(0, MAX_GENRES)
+      .map(g => g.name)
+      .join(', ');
+    result.set(id, str);
+  });
+  return result;
+}
+
+// ── Step 0: Valid genre names from MusicBrainz genre table ───────────────────
+// Columns: id(0) | gid(1) | name(2) | comment(3) | edits_pending(4) | last_updated(5)
+
+async function loadGenreNames(): Promise<Set<string>> {
+  const filePath = path.join(MBDUMP_PATH, 'genre');
+  if (!fs.existsSync(filePath)) {
+    console.warn('  Warning: genre file not found — no genre filtering applied');
+    return new Set();
+  }
+  console.log('Loading valid genre names…');
+  const names = new Set<string>();
+  const rl = await streamLines(filePath);
+  for await (const line of rl) {
+    const cols = line.split('\t');
+    const name = nullStr(cols[2]);
+    if (name) names.add(name.toLowerCase());
+  }
+  console.log(`  ${names.size} genres in MusicBrainz curated genre list`);
+  return names;
+}
+
+// ── Step 1: ISRC recording IDs ────────────────────────────────────────────────
 
 async function loadIsrcRecordingIds(): Promise<Set<number>> {
   const filePath = path.join(MBDUMP_PATH, 'isrc');
@@ -85,7 +133,7 @@ async function loadIsrcRecordingIds(): Promise<Set<number>> {
   console.log('Loading ISRC recording IDs…');
   const rl = await streamLines(filePath);
   for await (const line of rl) {
-    const cols = line.split('\t');
+    const cols  = line.split('\t');
     const recId = nullInt(cols[1]);
     if (recId != null) ids.add(recId);
   }
@@ -93,7 +141,7 @@ async function loadIsrcRecordingIds(): Promise<Set<number>> {
   return ids;
 }
 
-// ── Step 1: Tiny lookup tables ────────────────────────────────────────────────
+// ── Step 2: Tiny lookup tables ────────────────────────────────────────────────
 
 async function loadMap(
   fileName: string, idCol: number, nameCol: number,
@@ -111,38 +159,121 @@ async function loadMap(
   return map;
 }
 
-// ── Step 2: Best genre per recording (from recording_tag dump) ────────────────
+// ── Step 3: Genre tags per recording ─────────────────────────────────────────
+// Columns: recording(0) | tag(1) | count(2) | last_updated(3)
 
 async function loadRecordingGenres(
-  isrcIds:  Set<number>,
-  tagNames: Map<number, string>,
+  isrcIds:    Set<number>,
+  tagNames:   Map<number, string>,
+  genreNames: Set<string>,
 ): Promise<Map<number, string>> {
   const filePath = path.join(MBDUMP_PATH, 'recording_tag');
   if (!fs.existsSync(filePath)) return new Map();
   console.log('Loading recording genres…');
-  const best = new Map<number, { name: string; count: number }>();
-  const rl = await streamLines(filePath);
+  const acc = new Map<number, TagScore[]>();
+  const rl  = await streamLines(filePath);
   let lines = 0;
   for await (const line of rl) {
-    if (++lines % 5_000_000 === 0) process.stdout.write(`\r  ${(lines/1e6).toFixed(0)}M lines…`);
+    if (++lines % 5_000_000 === 0) process.stdout.write(`\r  ${(lines / 1e6).toFixed(0)}M lines…`);
     const cols  = line.split('\t');
     const recId = nullInt(cols[0]);
     const tagId = nullInt(cols[1]);
     const count = nullInt(cols[2]);
-    if (recId == null || tagId == null || count == null) continue;
+    if (recId == null || tagId == null || count == null || count < 1) continue;
     if (!isrcIds.has(recId)) continue;
     const name = tagNames.get(tagId);
     if (!name) continue;
-    const existing = best.get(recId);
-    if (!existing || count > existing.count) best.set(recId, { name, count });
+    if (genreNames.size > 0 && !genreNames.has(name.toLowerCase())) continue;
+    accumGenre(acc, recId, name, count);
   }
-  console.log(`\n  ${best.size.toLocaleString()} recordings have genre tags`);
-  const result = new Map<number, string>();
-  best.forEach(({ name }, id) => result.set(id, name));
-  return result;
+  process.stdout.write('\n');
+  console.log(`  ${acc.size.toLocaleString()} recordings have genre tags`);
+  return finalizeGenres(acc);
 }
 
-// ── Step 3: Medium → release mapping ─────────────────────────────────────────
+// ── Step 4: Genre tags per release group ──────────────────────────────────────
+// Columns: release_group(0) | tag(1) | count(2) | last_updated(3)
+
+async function loadReleaseGroupGenres(
+  tagNames:   Map<number, string>,
+  genreNames: Set<string>,
+): Promise<Map<number, string>> {
+  const filePath = path.join(MBDUMP_PATH, 'release_group_tag');
+  if (!fs.existsSync(filePath)) return new Map();
+  console.log('Loading release group genres…');
+  const acc = new Map<number, TagScore[]>();
+  const rl  = await streamLines(filePath);
+  let lines = 0;
+  for await (const line of rl) {
+    if (++lines % 1_000_000 === 0) process.stdout.write(`\r  ${lines.toLocaleString()} lines…`);
+    const cols  = line.split('\t');
+    const rgId  = nullInt(cols[0]);
+    const tagId = nullInt(cols[1]);
+    const count = nullInt(cols[2]);
+    if (rgId == null || tagId == null || count == null || count < 1) continue;
+    const name = tagNames.get(tagId);
+    if (!name) continue;
+    if (genreNames.size > 0 && !genreNames.has(name.toLowerCase())) continue;
+    accumGenre(acc, rgId, name, count);
+  }
+  process.stdout.write('\n');
+  console.log(`  ${acc.size.toLocaleString()} release groups have genre tags`);
+  return finalizeGenres(acc);
+}
+
+// ── Step 5: Genre tags per artist ─────────────────────────────────────────────
+// Columns: artist(0) | tag(1) | count(2) | last_updated(3)
+
+async function loadArtistGenres(
+  tagNames:   Map<number, string>,
+  genreNames: Set<string>,
+): Promise<Map<number, string>> {
+  const filePath = path.join(MBDUMP_PATH, 'artist_tag');
+  if (!fs.existsSync(filePath)) return new Map();
+  console.log('Loading artist genres…');
+  const acc = new Map<number, TagScore[]>();
+  const rl  = await streamLines(filePath);
+  let lines = 0;
+  for await (const line of rl) {
+    if (++lines % 1_000_000 === 0) process.stdout.write(`\r  ${lines.toLocaleString()} lines…`);
+    const cols     = line.split('\t');
+    const artistId = nullInt(cols[0]);
+    const tagId    = nullInt(cols[1]);
+    const count    = nullInt(cols[2]);
+    if (artistId == null || tagId == null || count == null || count < 1) continue;
+    const name = tagNames.get(tagId);
+    if (!name) continue;
+    if (genreNames.size > 0 && !genreNames.has(name.toLowerCase())) continue;
+    accumGenre(acc, artistId, name, count);
+  }
+  process.stdout.write('\n');
+  console.log(`  ${acc.size.toLocaleString()} artists have genre tags`);
+  return finalizeGenres(acc);
+}
+
+// ── Step 6: Artist credit → primary artist ID ────────────────────────────────
+// Columns: artist_credit(0) | position(1) | artist(2) | name(3) | join_phrase(4)
+
+async function loadArtistCredits(): Promise<Map<number, number>> {
+  const filePath = path.join(MBDUMP_PATH, 'artist_credit_name');
+  if (!fs.existsSync(filePath)) return new Map();
+  console.log('Loading artist credits…');
+  const map = new Map<number, number>(); // creditId → artistId
+  const rl  = await streamLines(filePath);
+  for await (const line of rl) {
+    const cols     = line.split('\t');
+    const creditId = nullInt(cols[0]);
+    const artistId = nullInt(cols[2]);
+    // Take first artist encountered per credit (file is ordered by position)
+    if (creditId != null && artistId != null && !map.has(creditId)) {
+      map.set(creditId, artistId);
+    }
+  }
+  console.log(`  ${map.size.toLocaleString()} artist credits loaded`);
+  return map;
+}
+
+// ── Step 7: Medium → release mapping ─────────────────────────────────────────
 
 async function loadMediumRelease(): Promise<Map<number, number>> {
   const filePath = path.join(MBDUMP_PATH, 'medium');
@@ -160,8 +291,7 @@ async function loadMediumRelease(): Promise<Map<number, number>> {
   return map;
 }
 
-// ── Step 4: Stream track file → pick best release per recording ───────────────
-// "Best" = smallest release_id (earliest added to MusicBrainz ≈ original release).
+// ── Step 8: Stream track file → pick best release per recording ───────────────
 
 async function loadTrackData(
   isrcIds:       Set<number>,
@@ -175,7 +305,7 @@ async function loadTrackData(
   let lines = 0;
   for await (const line of rl) {
     if (++lines % 5_000_000 === 0)
-      process.stdout.write(`\r  ${(lines/1e6).toFixed(0)}M lines, ${result.size.toLocaleString()} matched…`);
+      process.stdout.write(`\r  ${(lines / 1e6).toFixed(0)}M lines, ${result.size.toLocaleString()} matched…`);
     const cols     = line.split('\t');
     const recId    = nullInt(cols[2]);
     const mediumId = nullInt(cols[3]);
@@ -189,11 +319,12 @@ async function loadTrackData(
       result.set(recId, { releaseId: relId, trackPos });
     }
   }
-  console.log(`\n  ${result.size.toLocaleString()} recordings matched to releases`);
+  process.stdout.write('\n');
+  console.log(`  ${result.size.toLocaleString()} recordings matched to releases`);
   return result;
 }
 
-// ── Step 5: Release name + release_group + status ────────────────────────────
+// ── Step 9: Release name + release_group ─────────────────────────────────────
 
 async function loadReleaseData(releaseIds: Set<number>): Promise<Map<number, {
   name:           string;
@@ -208,19 +339,20 @@ async function loadReleaseData(releaseIds: Set<number>): Promise<Map<number, {
   let lines = 0;
   for await (const line of rl) {
     if (++lines % 1_000_000 === 0) process.stdout.write(`\r  ${lines.toLocaleString()} lines…`);
-    const cols    = line.split('\t');
-    const relId   = nullInt(cols[0]);
+    const cols   = line.split('\t');
+    const relId  = nullInt(cols[0]);
     if (relId == null || !releaseIds.has(relId)) continue;
-    const name    = nullStr(cols[2]);
-    const rgId    = nullInt(cols[4]);
-    const statId  = nullInt(cols[5]);
+    const name   = nullStr(cols[2]);
+    const rgId   = nullInt(cols[4]);
+    const statId = nullInt(cols[5]);
     if (name) map.set(relId, { name, releaseGroupId: rgId, statusId: statId });
   }
-  console.log(`\n  ${map.size.toLocaleString()} releases loaded`);
+  process.stdout.write('\n');
+  console.log(`  ${map.size.toLocaleString()} releases loaded`);
   return map;
 }
 
-// ── Step 6: Release → earliest year ──────────────────────────────────────────
+// ── Step 10: Release → earliest year ─────────────────────────────────────────
 
 async function loadReleaseYears(releaseIds: Set<number>): Promise<Map<number, number>> {
   const map = new Map<number, number>();
@@ -241,7 +373,7 @@ async function loadReleaseYears(releaseIds: Set<number>): Promise<Map<number, nu
   return map;
 }
 
-// ── Step 7: Release → label name ─────────────────────────────────────────────
+// ── Step 11: Release → label name ────────────────────────────────────────────
 
 async function loadReleaseLabels(
   releaseIds: Set<number>,
@@ -265,7 +397,7 @@ async function loadReleaseLabels(
   return map;
 }
 
-// ── Step 8: Release group → type name ────────────────────────────────────────
+// ── Step 12: Release group → type name ───────────────────────────────────────
 
 async function loadReleaseGroupTypes(
   rgIds:       Set<number>,
@@ -286,16 +418,14 @@ async function loadReleaseGroupTypes(
     const typeName = typeId != null ? (rgTypeNames.get(typeId) ?? 'Other') : 'Other';
     map.set(rgId, typeName);
   }
-  console.log(`\n  ${map.size.toLocaleString()} release groups typed`);
+  process.stdout.write('\n');
+  console.log(`  ${map.size.toLocaleString()} release groups typed`);
   return map;
 }
 
-// ── Step 9: Stream recording file → write enriched rows to temp TSV ──────────
-// This replaces the old approach of building two huge in-memory Maps
-// (gidToRecId + enriched). By writing to disk we avoid OOM.
-//
-// TSV columns: gid, album, release_year, release_type, label, track_number, genre
-// NULL values are stored as the literal string \N (standard PostgreSQL convention).
+// ── Step 13: Stream recording file → write enriched rows to temp TSV ──────────
+// recording columns: id(0) | gid(1) | name(2) | artist_credit(3) | length(4) | ...
+// TSV columns: gid | album | release_year | release_type | label | track_number | genre
 
 async function streamRecordingToTsv(
   recTrack:      Map<number, { releaseId: number; trackPos: number }>,
@@ -304,6 +434,9 @@ async function streamRecordingToTsv(
   releaseYears:  Map<number, number>,
   releaseLabels: Map<number, string>,
   rgTypes:       Map<number, string>,
+  rgGenres:      Map<number, string>,
+  artistGenres:  Map<number, string>,
+  artistCredits: Map<number, number>,
   outPath:       string,
 ): Promise<number> {
   const filePath = path.join(MBDUMP_PATH, 'recording');
@@ -319,11 +452,12 @@ async function streamRecordingToTsv(
 
   for await (const line of rl) {
     if (++lines % 5_000_000 === 0)
-      process.stdout.write(`\r  ${(lines/1e6).toFixed(0)}M lines, ${count.toLocaleString()} written…`);
+      process.stdout.write(`\r  ${(lines / 1e6).toFixed(0)}M lines, ${count.toLocaleString()} written…`);
 
-    const cols  = line.split('\t');
-    const recId = nullInt(cols[0]);
-    const gid   = nullStr(cols[1]);
+    const cols       = line.split('\t');
+    const recId      = nullInt(cols[0]);
+    const gid        = nullStr(cols[1]);
+    const artistCrId = nullInt(cols[3]);
     if (recId == null || !gid) continue;
 
     const trackInfo = recTrack.get(recId);
@@ -336,30 +470,35 @@ async function streamRecordingToTsv(
     const rgId        = release?.releaseGroupId ?? null;
     const releaseType = rgId != null ? (rgTypes.get(rgId) ?? null) : null;
     const album       = release?.name ?? null;
-    const genre       = recGenres.get(recId) ?? null;
+    const artistId    = artistCrId != null ? artistCredits.get(artistCrId) : undefined;
 
-    // Encode as tab-separated; use \N for nulls
+    // Cascading genre: recording-level → release group → artist
+    const genre =
+      recGenres.get(recId) ??
+      (rgId     != null    ? rgGenres.get(rgId)         : undefined) ??
+      (artistId != null    ? artistGenres.get(artistId) : undefined) ??
+      null;
+
     const row = [
       gid,
-      album        ?? '\\N',
-      year   != null ? String(year)      : '\\N',
-      releaseType  ?? '\\N',
-      labelName    ?? '\\N',
-      trackPos != null ? String(trackPos) : '\\N',
-      genre        ?? '\\N',
+      album       ?? '\\N',
+      year   != null ? String(year) : '\\N',
+      releaseType ?? '\\N',
+      labelName   ?? '\\N',
+      String(trackPos),
+      genre       ?? '\\N',
     ].join('\t');
     out.write(row + '\n');
     count++;
   }
 
-  // Wait for write stream to flush
   await new Promise<void>((resolve, reject) => out.end(err => err ? reject(err) : resolve()));
-  console.log(`\n  ${count.toLocaleString()} records written to ${path.basename(outPath)}`);
+  process.stdout.write('\n');
+  console.log(`  ${count.toLocaleString()} records written to ${path.basename(outPath)}`);
   return count;
 }
 
 // ── Build batch UPDATE SQL using CASE expressions ─────────────────────────────
-// One statement, many rows — D1's /raw endpoint handles it fine.
 
 interface EnrichedRow {
   album:       string | null;
@@ -374,15 +513,15 @@ function buildBatchUpdate(chunk: [string, EnrichedRow][]): string {
   const ids = chunk.map(([gid]) => s(gid)).join(',');
 
   function caseExpr(
-    col:       string,
-    getValue:  (d: EnrichedRow) => string,
+    col:        string,
+    getValue:   (d: EnrichedRow) => string,
     onlyNonNull = false,
   ): string {
-    const rows = onlyNonNull ? chunk.filter(([, d]) => getValue(d) !== 'NULL') : chunk;
+    const rows     = onlyNonNull ? chunk.filter(([, d]) => getValue(d) !== 'NULL') : chunk;
     const branches = rows.map(([gid, d]) => `WHEN ${s(gid)} THEN ${getValue(d)}`).join(' ');
     return branches
       ? `${col} = CASE mb_id ${branches} ELSE ${col} END`
-      : `${col} = ${col}`; // no-op
+      : `${col} = ${col}`;
   }
 
   const sets = [
@@ -391,14 +530,14 @@ function buildBatchUpdate(chunk: [string, EnrichedRow][]): string {
     caseExpr('release_type', d => s(d.releaseType)),
     caseExpr('label',        d => s(d.label)),
     caseExpr('track_number', d => n(d.trackNumber)),
-    // Genre: only overwrite if dump has a value (don't nuke API-enriched data)
+    // Genre: only overwrite rows that have a value — don't blank out API-enriched data
     caseExpr('genre',        d => s(d.genre), true),
   ].join(',\n  ');
 
   return `UPDATE tracks SET\n  ${sets}\nWHERE mb_id IN (${ids})`;
 }
 
-// ── Parse a line from the temp TSV back into an EnrichedRow ──────────────────
+// ── Parse a line from the temp TSV ───────────────────────────────────────────
 
 function parseTsvRow(line: string): [string, EnrichedRow] | null {
   const cols = line.split('\t');
@@ -427,57 +566,62 @@ async function main() {
   console.log(`  Dump path: ${MBDUMP_PATH}`);
   console.log('');
 
-  // ── Schema: add new columns (idempotent) ─────────────────────────────────────
-  console.log('Adding new columns (if not already present)…');
+  // ── Schema: add new columns (idempotent) ──────────────────────────────────
+  console.log('Ensuring schema columns exist…');
   for (const sql of [
     'ALTER TABLE tracks ADD COLUMN release_type TEXT',
     'ALTER TABLE tracks ADD COLUMN label        TEXT',
     'ALTER TABLE tracks ADD COLUMN track_number INTEGER',
   ]) {
-    try { await d1Raw(sql); console.log(`  ✓ ${sql.split(' ').slice(0, 6).join(' ')}`); }
-    catch { console.log(`  (already exists) ${sql.split(' ').slice(0, 6).join(' ')}`); }
+    try   { await d1Raw(sql); console.log(`  ✓ added: ${sql.match(/ADD COLUMN \w+/)![0]}`); }
+    catch { console.log(`  (already exists) ${sql.match(/ADD COLUMN \w+/)![0]}`); }
   }
   console.log('');
 
-  // ── Drop FTS trigger so album updates don't trigger FTS rewrites ─────────────
+  // ── Drop FTS trigger (prevents per-row FTS writes during bulk update) ──────
   console.log('Dropping FTS update trigger…');
   await d1Raw('DROP TRIGGER IF EXISTS tracks_au');
-  console.log('  ✓ trigger dropped');
+  console.log('  ✓ done');
   console.log('');
 
-  // ── Phase 1: build temp TSV (skipped if temp file already exists) ─────────────
+  // ── Phase 1: build temp TSV ───────────────────────────────────────────────
 
-  const tmpExists = fs.existsSync(TMP_FILE);
-
-  if (tmpExists) {
-    console.log(`Temp file already exists (${TMP_FILE})`);
-    console.log('  Skipping data-load phase — jumping straight to D1 updates.');
-    console.log('  (Delete enrich_temp.tsv to start a fresh run.)');
+  if (fs.existsSync(TMP_FILE)) {
+    console.log(`Temp file found: ${TMP_FILE}`);
+    console.log('  Skipping data-load — jumping straight to D1 updates.');
+    console.log('  To rebuild with fresh genre data, delete enrich_temp.tsv first.');
     console.log('');
   } else {
-    // ── Load all lookup data ────────────────────────────────────────────────────
-    const isrcIds    = await loadIsrcRecordingIds();
-    const rgTypeMap  = await loadMap('release_group_primary_type', 0, 1);
-    const tagNames   = await loadMap('tag', 0, 1);
-    const labelNames = await loadMap('label', 0, 2);
-    console.log(`  ${rgTypeMap.size} release types, ${tagNames.size} tags, ${labelNames.size} labels`);
+    // ── Load all lookup data ────────────────────────────────────────────────
+    const genreNames  = await loadGenreNames();
+    const isrcIds     = await loadIsrcRecordingIds();
+    const rgTypeMap   = await loadMap('release_group_primary_type', 0, 1);
+    const tagNames    = await loadMap('tag', 0, 1);
+    const labelNames  = await loadMap('label', 0, 2);
+    console.log(`  ${rgTypeMap.size} release types · ${tagNames.size.toLocaleString()} tags · ${labelNames.size.toLocaleString()} labels`);
+    console.log('');
 
-    const recGenres  = await loadRecordingGenres(isrcIds, tagNames);
-    tagNames.clear(); // no longer needed after this — free memory
+    const recGenres    = await loadRecordingGenres(isrcIds, tagNames, genreNames);
+    const rgGenres     = await loadReleaseGroupGenres(tagNames, genreNames);
+    const artistGenres = await loadArtistGenres(tagNames, genreNames);
+    tagNames.clear();
+    console.log('');
 
-    const medRelease = await loadMediumRelease();
-    const recTrack   = await loadTrackData(isrcIds, medRelease);
-    medRelease.clear(); // free ~200MB
-    isrcIds.clear();    // free ~200MB
+    const artistCredits = await loadArtistCredits();
+    const medRelease    = await loadMediumRelease();
+    const recTrack      = await loadTrackData(isrcIds, medRelease);
+    medRelease.clear();
+    isrcIds.clear();
 
     const ourReleaseIds = new Set<number>();
     recTrack.forEach(({ releaseId }) => ourReleaseIds.add(releaseId));
     console.log(`  ${ourReleaseIds.size.toLocaleString()} unique releases to look up`);
+    console.log('');
 
     const releaseData   = await loadReleaseData(ourReleaseIds);
     const releaseYears  = await loadReleaseYears(ourReleaseIds);
     const releaseLabels = await loadReleaseLabels(ourReleaseIds, labelNames);
-    labelNames.clear(); // no longer needed after this — free memory
+    labelNames.clear();
     ourReleaseIds.clear();
 
     const rgIds = new Set<number>();
@@ -485,27 +629,23 @@ async function main() {
       if (releaseGroupId != null) rgIds.add(releaseGroupId);
     });
     const rgTypes = await loadReleaseGroupTypes(rgIds, rgTypeMap);
-    rgTypeMap.clear(); // no longer needed after this — free memory
+    rgTypeMap.clear();
     console.log('');
 
-    // ── Stream recording file → temp TSV ──────────────────────────────────────
     await streamRecordingToTsv(
       recTrack, recGenres, releaseData, releaseYears, releaseLabels, rgTypes,
+      rgGenres, artistGenres, artistCredits,
       TMP_FILE,
     );
 
-    // Free all lookup Maps — the TSV on disk is our only data source from here
-    recTrack.clear();
-    recGenres.clear();
-    releaseData.clear();
-    releaseYears.clear();
-    releaseLabels.clear();
-    rgTypes.clear();
+    recTrack.clear(); recGenres.clear(); releaseData.clear();
+    releaseYears.clear(); releaseLabels.clear(); rgTypes.clear();
+    rgGenres.clear(); artistGenres.clear(); artistCredits.clear();
     console.log('  Lookup maps freed');
     console.log('');
   }
 
-  // ── Phase 2: batch UPDATE D1 from temp TSV ───────────────────────────────────
+  // ── Phase 2: batch UPDATE D1 from temp TSV ────────────────────────────────
   console.log(`Updating D1 in batches of ${ROWS_PER_BATCH}…`);
 
   const tsvRl = await streamLines(TMP_FILE);
@@ -524,9 +664,8 @@ async function main() {
       if (errors <= 5) console.error('\nBatch error:', (err as Error).message.slice(0, 200));
     }
     chunk = [];
-    if (updated % 10_000 < ROWS_PER_BATCH) {
+    if (updated % 10_000 < ROWS_PER_BATCH)
       process.stdout.write(`\r  ${updated.toLocaleString()} updated, ${errors} errors`);
-    }
   }
 
   for await (const line of tsvRl) {
@@ -535,23 +674,20 @@ async function main() {
     chunk.push(parsed);
     if (chunk.length >= ROWS_PER_BATCH) await flushChunk();
   }
-  await flushChunk(); // last partial batch
+  await flushChunk();
 
   console.log(`\n  ${updated.toLocaleString()} records updated, ${errors} errors`);
   console.log('');
 
-  // ── Clean up temp file ────────────────────────────────────────────────────────
   try {
     fs.unlinkSync(TMP_FILE);
     console.log('  Temp file deleted');
   } catch {
     console.log(`  Note: could not delete temp file — remove ${TMP_FILE} manually`);
   }
+  console.log('');
 
-  // ── Rebuild FTS index in batches ─────────────────────────────────────────────
-  // The single 'rebuild' command times out on 5.7M rows, so we drop+recreate
-  // and repopulate in chunks of 10,000 rows. Keyword searches degrade gracefully
-  // as the table refills (title/artist matches return as soon as their batch lands).
+  // ── Rebuild FTS index in batches ──────────────────────────────────────────
   console.log('Rebuilding FTS index in batches of 10,000…');
   await d1Raw('DROP TRIGGER IF EXISTS tracks_au');
   await d1Raw('DROP TABLE IF EXISTS tracks_fts');
@@ -560,23 +696,35 @@ async function main() {
     tokenize = 'porter ascii'
   )`);
 
-  const FTS_BATCH = 10_000;
-  const MAX_ID    = 7_743_491;
-  let ftsInserted = 0;
+  const FTS_BATCH    = 10_000;
+  const MAX_ID       = 7_743_491;
+  const totalBatches = Math.ceil(MAX_ID / FTS_BATCH);
+  const BAR_WIDTH    = 32;
+  const ftsStart     = Date.now();
+  let   batchNum     = 0;
+
   for (let lo = 1; lo <= MAX_ID; lo += FTS_BATCH) {
     const hi = lo + FTS_BATCH - 1;
     await d1Raw(
       `INSERT INTO tracks_fts(rowid, title, artist, album)
        SELECT id, title, artist, album FROM tracks WHERE id BETWEEN ${lo} AND ${hi}`
     );
-    ftsInserted += FTS_BATCH;
-    if (ftsInserted % 500_000 === 0) {
-      process.stdout.write(`  ${ftsInserted.toLocaleString()} rows inserted…\n`);
-    }
+    batchNum++;
+    const pct     = batchNum / totalBatches;
+    const elapsed = (Date.now() - ftsStart) / 1000;
+    const rate    = batchNum / elapsed;
+    const etaSec  = (totalBatches - batchNum) / rate;
+    const eta     = etaSec < 60
+      ? `${Math.round(etaSec)}s`
+      : `${Math.floor(etaSec / 60)}m ${Math.round(etaSec % 60)}s`;
+    const filled  = Math.round(pct * BAR_WIDTH);
+    const bar     = '█'.repeat(filled) + '░'.repeat(BAR_WIDTH - filled);
+    const rows    = Math.min(batchNum * FTS_BATCH, MAX_ID).toLocaleString();
+    process.stdout.write(`\r  [${bar}] ${Math.round(pct * 100)}%  ${rows} rows  ETA: ${eta}   `);
   }
+  process.stdout.write('\n');
   console.log('  ✓ FTS rebuilt');
 
-  // ── Recreate FTS trigger ──────────────────────────────────────────────────────
   console.log('Recreating FTS update trigger…');
   await d1Raw(`CREATE TRIGGER IF NOT EXISTS tracks_au
     AFTER UPDATE OF title, artist, album ON tracks BEGIN
