@@ -44,43 +44,59 @@ interface Filters {
   yearTo:         string;
   releaseType:    string;
   label:          string;
+  artistType:     string;
+  artistGender:   string;
+  artistCountry:  string;
+  language:       string;
 }
 const EMPTY_FILTERS: Filters = {
   titleContains: '', artistContains: '',
   genre: '', yearFrom: '', yearTo: '', releaseType: '', label: '',
+  artistType: '', artistGender: '', artistCountry: '', language: '',
 };
 
 function filtersFromParams(sp: URLSearchParams): Filters {
   return {
-    titleContains:  sp.get('title')        ?? '',
-    artistContains: sp.get('artist')       ?? '',
-    genre:          sp.get('genre')        ?? '',
-    yearFrom:       sp.get('year_from')    ?? '',
-    yearTo:         sp.get('year_to')      ?? '',
-    releaseType:    sp.get('release_type') ?? '',
-    label:          sp.get('label')        ?? '',
+    titleContains:  sp.get('title')          ?? '',
+    artistContains: sp.get('artist')         ?? '',
+    genre:          sp.get('genre')          ?? '',
+    yearFrom:       sp.get('year_from')      ?? '',
+    yearTo:         sp.get('year_to')        ?? '',
+    releaseType:    sp.get('release_type')   ?? '',
+    label:          sp.get('label')          ?? '',
+    artistType:     sp.get('artist_type')    ?? '',
+    artistGender:   sp.get('artist_gender')  ?? '',
+    artistCountry:  sp.get('artist_country') ?? '',
+    language:       sp.get('language')       ?? '',
   };
 }
 
 function buildUrl(q: string, f: Filters, pg: number, pp: number, s: string): string {
   const p = new URLSearchParams();
-  if (q)                p.set('q',            q);
-  if (f.titleContains)  p.set('title',         f.titleContains);
-  if (f.artistContains) p.set('artist',        f.artistContains);
-  if (f.genre)          p.set('genre',         f.genre);
-  if (f.yearFrom)       p.set('year_from',     f.yearFrom);
-  if (f.yearTo)         p.set('year_to',       f.yearTo);
-  if (f.releaseType)    p.set('release_type',  f.releaseType);
-  if (f.label)          p.set('label',         f.label);
-  if (pg > 1)           p.set('page',          String(pg));
-  if (pp !== 50)        p.set('per_page',      String(pp));
-  if (s !== 'relevance') p.set('sort',         s);
+  if (q)                p.set('q',             q);
+  if (f.titleContains)  p.set('title',          f.titleContains);
+  if (f.artistContains) p.set('artist',         f.artistContains);
+  if (f.genre)          p.set('genre',          f.genre);
+  if (f.yearFrom)       p.set('year_from',      f.yearFrom);
+  if (f.yearTo)         p.set('year_to',        f.yearTo);
+  if (f.releaseType)    p.set('release_type',   f.releaseType);
+  if (f.label)          p.set('label',          f.label);
+  if (f.artistType)     p.set('artist_type',    f.artistType);
+  if (f.artistGender)   p.set('artist_gender',  f.artistGender);
+  if (f.artistCountry)  p.set('artist_country', f.artistCountry);
+  if (f.language)       p.set('language',       f.language);
+  if (pg > 1)           p.set('page',           String(pg));
+  if (pp !== 50)        p.set('per_page',       String(pp));
+  if (s !== 'relevance') p.set('sort',          s);
   const qs = p.toString();
   return qs ? `/?${qs}` : '/';
 }
 
 function activeCount(f: Filters): number {
-  return [f.titleContains, f.artistContains, f.genre, f.yearFrom, f.yearTo, f.releaseType, f.label].filter(Boolean).length;
+  return [
+    f.titleContains, f.artistContains, f.genre, f.yearFrom, f.yearTo,
+    f.releaseType, f.label, f.artistType, f.artistGender, f.artistCountry, f.language,
+  ].filter(Boolean).length;
 }
 
 // ── Duration normalizer ───────────────────────────────────────────────────────
@@ -138,6 +154,10 @@ export default function SearchPage() {
   const [advYearTo,   setAdvYearTo]   = useState('');
   const [advRelType,  setAdvRelType]  = useState('');
   const [advLabel,    setAdvLabel]    = useState('');
+  const [advArtistType,    setAdvArtistType]    = useState('');
+  const [advArtistGender,  setAdvArtistGender]  = useState('');
+  const [advArtistCountry, setAdvArtistCountry] = useState('');
+  const [advLanguage,      setAdvLanguage]      = useState('');
 
   const abortRef = useRef<AbortController | null>(null);
 
@@ -164,13 +184,17 @@ export default function SearchPage() {
       const params = new URLSearchParams();
       if (q.trim())           params.set('q',            q.trim());
       if (tol > 0)            params.set('tolerance',     String(tol));
-      if (f.titleContains)    params.set('title',         f.titleContains);
-      if (f.artistContains)   params.set('artist',        f.artistContains);
-      if (f.genre)            params.set('genre',         f.genre);
-      if (f.yearFrom)         params.set('year_from',     f.yearFrom);
-      if (f.yearTo)           params.set('year_to',       f.yearTo);
-      if (f.releaseType)      params.set('release_type',  f.releaseType);
-      if (f.label)            params.set('label',         f.label);
+      if (f.titleContains)    params.set('title',          f.titleContains);
+      if (f.artistContains)   params.set('artist',         f.artistContains);
+      if (f.genre)            params.set('genre',          f.genre);
+      if (f.yearFrom)         params.set('year_from',      f.yearFrom);
+      if (f.yearTo)           params.set('year_to',        f.yearTo);
+      if (f.releaseType)      params.set('release_type',   f.releaseType);
+      if (f.label)            params.set('label',          f.label);
+      if (f.artistType)       params.set('artist_type',    f.artistType);
+      if (f.artistGender)     params.set('artist_gender',  f.artistGender);
+      if (f.artistCountry)    params.set('artist_country', f.artistCountry);
+      if (f.language)         params.set('language',       f.language);
       params.set('page',     String(pg));
       params.set('per_page', String(pp));
       if (s !== 'relevance') params.set('sort', s);
@@ -276,6 +300,10 @@ export default function SearchPage() {
       yearTo:         advYearTo,
       releaseType:    advRelType,
       label:          advLabel,
+      artistType:     advArtistType,
+      artistGender:   advArtistGender,
+      artistCountry:  advArtistCountry,
+      language:       advLanguage,
     };
     if (!compiled && activeCount(newFilters) === 0) return;
     setQuery(compiled);
@@ -296,10 +324,15 @@ export default function SearchPage() {
     if (advYearFrom || advYearTo) summary.push('Year');
     if (advRelType)  summary.push('Type');
     if (advLabel)    summary.push('Label');
+    if (advArtistType)    summary.push('Artist type');
+    if (advArtistGender)  summary.push('Gender');
+    if (advArtistCountry) summary.push('Country');
+    if (advLanguage)      summary.push('Language');
     setAdvSummary(summary);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [advTitle, advArtist, advDurMode, advExact, advFrom, advTo,
       advGenre, advYearFrom, advYearTo, advRelType, advLabel,
+      advArtistType, advArtistGender, advArtistCountry, advLanguage,
       perPage, sort, doSearch, router]);
 
   // Sync advanced filter fields from main filter state when advanced opens
@@ -312,6 +345,10 @@ export default function SearchPage() {
       setAdvYearTo(filters.yearTo);
       setAdvRelType(filters.releaseType);
       setAdvLabel(filters.label);
+      setAdvArtistType(filters.artistType);
+      setAdvArtistGender(filters.artistGender);
+      setAdvArtistCountry(filters.artistCountry);
+      setAdvLanguage(filters.language);
     }
   }, [advExpanded]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -433,6 +470,48 @@ export default function SearchPage() {
                   </div>
                 </div>
 
+                {/* Artist type + Gender */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs font-medium text-gray-500 mb-1 block">Artist type</label>
+                    <select value={advArtistType} onChange={e => setAdvArtistType(e.target.value)}
+                      className={`${ADV_INPUT} pr-8 cursor-pointer`}>
+                      <option value="">Any</option>
+                      <option value="Person">Person (solo)</option>
+                      <option value="Group">Group / Band</option>
+                      <option value="Orchestra">Orchestra</option>
+                      <option value="Choir">Choir</option>
+                      <option value="Other">Other</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-gray-500 mb-1 block">Artist gender</label>
+                    <select value={advArtistGender} onChange={e => setAdvArtistGender(e.target.value)}
+                      className={`${ADV_INPUT} pr-8 cursor-pointer`}>
+                      <option value="">Any</option>
+                      <option value="Male">Male</option>
+                      <option value="Female">Female</option>
+                      <option value="Non-binary">Non-binary</option>
+                    </select>
+                  </div>
+                </div>
+
+                {/* Country + Language */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs font-medium text-gray-500 mb-1 block">Artist country</label>
+                    <input value={advArtistCountry} onChange={e => setAdvArtistCountry(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter') handleAdvancedSubmit(); }}
+                      placeholder="United States, Japan…" className={ADV_INPUT} />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-gray-500 mb-1 block">Language</label>
+                    <input value={advLanguage} onChange={e => setAdvLanguage(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter') handleAdvancedSubmit(); }}
+                      placeholder="English, Japanese…" className={ADV_INPUT} />
+                  </div>
+                </div>
+
                 {/* Year range */}
                 <div>
                   <label className="text-xs font-medium text-gray-500 mb-2 block">Year</label>
@@ -523,13 +602,16 @@ export default function SearchPage() {
                     Search
                   </button>
                   {(advGenre || advYearFrom || advYearTo || advRelType || advLabel ||
-                    advTitle || advArtist || advExact || advFrom || advTo) && (
+                    advTitle || advArtist || advExact || advFrom || advTo ||
+                    advArtistType || advArtistGender || advArtistCountry || advLanguage) && (
                     <button
                       onClick={() => {
                         setAdvGenre(''); setAdvYearFrom(''); setAdvYearTo('');
                         setAdvRelType(''); setAdvLabel('');
                         setAdvTitle(''); setAdvArtist('');
                         setAdvExact(''); setAdvFrom(''); setAdvTo('');
+                        setAdvArtistType(''); setAdvArtistGender('');
+                        setAdvArtistCountry(''); setAdvLanguage('');
                         setAdvSummary([]);
                       }}
                       className="text-xs text-gray-400 hover:text-red-500 transition-colors"
@@ -576,6 +658,26 @@ export default function SearchPage() {
             {filters.label && (
               <span className="text-xs bg-blue-50 text-blue-700 border border-blue-200 px-2 py-0.5 rounded-full">
                 label: {filters.label}
+              </span>
+            )}
+            {filters.artistType && (
+              <span className="text-xs bg-blue-50 text-blue-700 border border-blue-200 px-2 py-0.5 rounded-full">
+                type: {filters.artistType}
+              </span>
+            )}
+            {filters.artistGender && (
+              <span className="text-xs bg-blue-50 text-blue-700 border border-blue-200 px-2 py-0.5 rounded-full">
+                gender: {filters.artistGender}
+              </span>
+            )}
+            {filters.artistCountry && (
+              <span className="text-xs bg-blue-50 text-blue-700 border border-blue-200 px-2 py-0.5 rounded-full">
+                country: {filters.artistCountry}
+              </span>
+            )}
+            {filters.language && (
+              <span className="text-xs bg-blue-50 text-blue-700 border border-blue-200 px-2 py-0.5 rounded-full">
+                lang: {filters.language}
               </span>
             )}
             <button

@@ -22,14 +22,16 @@ const JOINED_COLS = `
   t.id, t.title, t.artist, t.album, t.duration_ms,
   t.disambiguation AS version, t.isrc, t.release_year, t.mb_id,
   t.genre, t.popularity, t.popularity_source, t.search_count,
-  t.release_type, t.label, t.track_number
+  t.release_type, t.label, t.track_number,
+  t.artist_type, t.artist_gender, t.artist_country, t.language
 `;
 
 const DIRECT_COLS = `
   id, title, artist, album, duration_ms,
   disambiguation AS version, isrc, release_year, mb_id,
   genre, popularity, popularity_source, search_count,
-  release_type, label, track_number
+  release_type, label, track_number,
+  artist_type, artist_gender, artist_country, language
 `;
 
 // ── MusicBrainz genre enrichment ──────────────────────────────────────────────
@@ -79,19 +81,27 @@ interface Filters {
   yearTo?:         number;
   releaseType?:    string;
   label?:          string;
+  artistType?:     string;
+  artistGender?:   string;
+  artistCountry?:  string;
+  language?:       string;
 }
 
 function buildFilterClauses(f: Filters, alias: string): { sql: string; params: unknown[] } {
   const p     = alias ? `${alias}.` : '';
   const conds: string[]  = [];
   const vals:  unknown[] = [];
-  if (f.titleContains)    { conds.push(`${p}title LIKE ?`);        vals.push(`%${f.titleContains}%`); }
-  if (f.artistContains)   { conds.push(`${p}artist LIKE ?`);       vals.push(`%${f.artistContains}%`); }
-  if (f.genre)            { conds.push(`${p}genre LIKE ?`);        vals.push(`%${f.genre}%`); }
-  if (f.yearFrom != null) { conds.push(`${p}release_year >= ?`);   vals.push(f.yearFrom); }
-  if (f.yearTo   != null) { conds.push(`${p}release_year <= ?`);   vals.push(f.yearTo); }
-  if (f.releaseType)      { conds.push(`${p}release_type = ?`);    vals.push(f.releaseType); }
-  if (f.label)            { conds.push(`${p}label LIKE ?`);        vals.push(`%${f.label}%`); }
+  if (f.titleContains)    { conds.push(`${p}title LIKE ?`);          vals.push(`%${f.titleContains}%`); }
+  if (f.artistContains)   { conds.push(`${p}artist LIKE ?`);         vals.push(`%${f.artistContains}%`); }
+  if (f.genre)            { conds.push(`${p}genre LIKE ?`);          vals.push(`%${f.genre}%`); }
+  if (f.yearFrom != null) { conds.push(`${p}release_year >= ?`);     vals.push(f.yearFrom); }
+  if (f.yearTo   != null) { conds.push(`${p}release_year <= ?`);     vals.push(f.yearTo); }
+  if (f.releaseType)      { conds.push(`${p}release_type = ?`);      vals.push(f.releaseType); }
+  if (f.label)            { conds.push(`${p}label LIKE ?`);          vals.push(`%${f.label}%`); }
+  if (f.artistType)       { conds.push(`${p}artist_type = ?`);       vals.push(f.artistType); }
+  if (f.artistGender)     { conds.push(`${p}artist_gender = ?`);     vals.push(f.artistGender); }
+  if (f.artistCountry)    { conds.push(`${p}artist_country LIKE ?`); vals.push(`%${f.artistCountry}%`); }
+  if (f.language)         { conds.push(`${p}language LIKE ?`);       vals.push(`%${f.language}%`); }
   return { sql: conds.length ? ' AND ' + conds.join(' AND ') : '', params: vals };
 }
 
@@ -328,18 +338,30 @@ export default {
     const q         = url.searchParams.get('q') ?? '';
     const tolerance = parseInt(url.searchParams.get('tolerance') ?? '0', 10) || 0;
 
-    const titleContains  = url.searchParams.get('title')        || undefined;
-    const artistContains = url.searchParams.get('artist')       || undefined;
-    const genre          = url.searchParams.get('genre')        || undefined;
+    const titleContains  = url.searchParams.get('title')          || undefined;
+    const artistContains = url.searchParams.get('artist')         || undefined;
+    const genre          = url.searchParams.get('genre')          || undefined;
     const yearFromRaw    = url.searchParams.get('year_from');
     const yearToRaw      = url.searchParams.get('year_to');
     const yearFrom       = yearFromRaw ? parseInt(yearFromRaw, 10) : undefined;
     const yearTo         = yearToRaw   ? parseInt(yearToRaw,   10) : undefined;
-    const releaseType    = url.searchParams.get('release_type') || undefined;
-    const label          = url.searchParams.get('label')        || undefined;
+    const releaseType    = url.searchParams.get('release_type')   || undefined;
+    const label          = url.searchParams.get('label')          || undefined;
+    const artistType     = url.searchParams.get('artist_type')    || undefined;
+    const artistGender   = url.searchParams.get('artist_gender')  || undefined;
+    const artistCountry  = url.searchParams.get('artist_country') || undefined;
+    const language       = url.searchParams.get('language')       || undefined;
 
-    const filters: Filters = { titleContains, artistContains, genre, yearFrom, yearTo, releaseType, label };
-    const hasFilters = !!(titleContains || artistContains || genre || yearFrom != null || yearTo != null || releaseType || label);
+    const filters: Filters = {
+      titleContains, artistContains, genre, yearFrom, yearTo,
+      releaseType, label, artistType, artistGender, artistCountry, language,
+    };
+    const hasFilters = !!(
+      titleContains || artistContains || genre ||
+      yearFrom != null || yearTo != null ||
+      releaseType || label ||
+      artistType || artistGender || artistCountry || language
+    );
 
     const page    = Math.max(1, Math.min(500, parseInt(url.searchParams.get('page')     ?? '1',  10) || 1));
     const perPage = Math.max(1, Math.min(200, parseInt(url.searchParams.get('per_page') ?? '50', 10) || 50));

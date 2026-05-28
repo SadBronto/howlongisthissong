@@ -16,6 +16,10 @@ export interface Track {
   popularity: number | null;        // Last.fm/ListenBrainz score 0–100; null = unscored
   popularity_source: string | null; // 'lastfm' | 'listenbrainz' | 'unfound' | null
   search_count: number;             // fractional credit from site searches (organic floor signal)
+  artist_type:    string | null;    // Person / Group / Orchestra / Choir / Other
+  artist_gender:  string | null;    // Male / Female / Non-binary
+  artist_country: string | null;    // country/area name
+  language:       string | null;    // language of the release
   relevance?: number;
 }
 

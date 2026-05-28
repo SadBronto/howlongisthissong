@@ -14,7 +14,8 @@
     "enrich-d1": "tsx scripts/enrich-d1.ts",
     "rebuild-fts": "tsx scripts/rebuild-fts.ts",
     "enrich-genres": "tsx scripts/enrich-genres.ts",
-    "enrich-popularity": "tsx scripts/enrich-popularity.ts"
+    "enrich-popularity": "tsx scripts/enrich-popularity.ts",
+    "enrich-artist-data": "tsx scripts/enrich-artist-data.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.4",
