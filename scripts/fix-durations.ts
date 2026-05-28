@@ -37,7 +37,7 @@ const LASTFM_KEY  = process.env.LASTFM_API_KEY ?? '';
 
 const MANUAL_FILE  = path.join(process.cwd(), 'fix_durations_manual.tsv');
 const BAR_WIDTH    = 32;
-const ITUNES_CONC  = 15;  // concurrent iTunes lookups — no meaningful rate limit
+const ITUNES_CONC  = 3;   // iTunes rate-limits aggressively on concurrent requests
 
 // ── D1 helpers ─────────────────────────────────────────────────────────────────
 
@@ -190,6 +190,7 @@ async function main() {
   const active = new Map<symbol, Promise<void>>();
   async function runItunes(track: TrackRow): Promise<void> {
     const art      = track.artist ?? '';
+    await sleep(300);
     const itunesMs = await tryItunes(track.title, art);
     if (itunesMs !== null) {
       if (itunesMs !== track.duration_ms) {
