@@ -94,7 +94,8 @@ function buildUrl(q: string, f: Filters, pg: number, pp: number, s: string): str
 
 function activeCount(f: Filters): number {
   return [
-    f.titleContains, f.artistContains, f.genre, f.yearFrom, f.yearTo,
+    f.titleContains, f.artistContains, f.genre,
+    f.yearFrom || f.yearTo,   // range counts as one filter
     f.releaseType, f.label, f.artistType, f.artistGender, f.artistCountry, f.language,
   ].filter(Boolean).length;
 }
