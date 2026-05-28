@@ -15,7 +15,9 @@
     "rebuild-fts": "tsx scripts/rebuild-fts.ts",
     "enrich-genres": "tsx scripts/enrich-genres.ts",
     "enrich-popularity": "tsx scripts/enrich-popularity.ts",
-    "enrich-artist-data": "tsx scripts/enrich-artist-data.ts"
+    "enrich-artist-data": "tsx scripts/enrich-artist-data.ts",
+    "fix-durations": "tsx scripts/fix-durations.ts",
+    "enrich-acousticbrainz": "tsx scripts/enrich-acousticbrainz.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.4",
