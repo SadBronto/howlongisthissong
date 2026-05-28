@@ -47,7 +47,7 @@ const TOP_LANGUAGES = [
 const TOP_LANG_CODES = new Set(TOP_LANGUAGES.map(l => l.code));
 
 // Full ISO 639-3 list for the modal (top languages present in the DB)
-const ISO_LANGUAGE_NAMES: [string, string][] = [
+const ISO_LANGUAGE_NAMES = ([
   ['afr','Afrikaans'],       ['amh','Amharic'],         ['ara','Arabic'],
   ['ast','Asturian'],        ['aze','Azerbaijani'],      ['bam','Bambara'],
   ['bel','Belarusian'],      ['ben','Bengali'],          ['bos','Bosnian'],
@@ -81,7 +81,7 @@ const ISO_LANGUAGE_NAMES: [string, string][] = [
   ['uzb','Uzbek'],           ['vie','Vietnamese'],       ['wol','Wolof'],
   ['yid','Yiddish'],         ['yue','Cantonese'],        ['zho','Chinese'],
   ['zul','Zulu'],            ['zxx','No linguistic content'],
-].sort((a, b) => a[1].localeCompare(b[1]));
+] as [string, string][]).sort((a, b) => a[1].localeCompare(b[1]));
 
 // ── Filter state type ─────────────────────────────────────────────────────────
 interface Filters {
