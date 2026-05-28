@@ -117,6 +117,7 @@ export default function SearchPage() {
 
   // ── Advanced form state ────────────────────────────────────────────────────
   const [advExpanded, setAdvExpanded] = useState(false);
+  const [advSummary,  setAdvSummary]  = useState<string[]>([]);
   const [advTitle,    setAdvTitle]    = useState('');
   const [advArtist,   setAdvArtist]   = useState('');
   const [advDurMode,  setAdvDurMode]  = useState<DurationMode>('exact');
@@ -204,6 +205,7 @@ export default function SearchPage() {
     setError(null);
     setTolerance(0);
     setPage(1);
+    setAdvSummary([]);
     router.replace('/', { scroll: false });
   }, [router]);
 
@@ -269,6 +271,19 @@ export default function SearchPage() {
     setPage(1);
     doSearch(compiled, 0, newFilters, 1, perPage, sort);
     router.replace(buildUrl(compiled, newFilters, 1, perPage, sort), { scroll: false });
+
+    // Collapse panel and build field summary
+    setAdvExpanded(false);
+    const summary: string[] = [];
+    if (advTitle.trim())  summary.push('Title');
+    if (advArtist.trim()) summary.push('Artist');
+    if (advDurMode === 'exact' ? advExact.trim() : (advFrom.trim() || advTo.trim()))
+      summary.push('Duration');
+    if (advGenre)    summary.push('Genre');
+    if (advYearFrom || advYearTo) summary.push('Year');
+    if (advRelType)  summary.push('Type');
+    if (advLabel)    summary.push('Label');
+    setAdvSummary(summary);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [advTitle, advArtist, advDurMode, advExact, advFrom, advTo,
       advGenre, advYearFrom, advYearTo, advRelType, advLabel,
@@ -359,6 +374,11 @@ export default function SearchPage() {
               {numActive > 0 && (
                 <span className="ml-0.5 bg-blue-100 text-blue-600 text-xs font-semibold px-1.5 py-0.5 rounded-full">
                   {numActive}
+                </span>
+              )}
+              {!advExpanded && advSummary.length > 0 && (
+                <span className="ml-1 font-semibold text-gray-600">
+                  {advSummary.join(', ')}
                 </span>
               )}
             </button>
@@ -487,11 +507,15 @@ export default function SearchPage() {
                   >
                     Search
                   </button>
-                  {(advGenre || advYearFrom || advYearTo || advRelType || advLabel) && (
+                  {(advGenre || advYearFrom || advYearTo || advRelType || advLabel ||
+                    advTitle || advArtist || advExact || advFrom || advTo) && (
                     <button
                       onClick={() => {
                         setAdvGenre(''); setAdvYearFrom(''); setAdvYearTo('');
                         setAdvRelType(''); setAdvLabel('');
+                        setAdvTitle(''); setAdvArtist('');
+                        setAdvExact(''); setAdvFrom(''); setAdvTo('');
+                        setAdvSummary([]);
                       }}
                       className="text-xs text-gray-400 hover:text-red-500 transition-colors"
                     >
@@ -532,6 +556,7 @@ export default function SearchPage() {
             <button
               onClick={() => {
                 setFilters(EMPTY_FILTERS);
+                setAdvSummary([]);
                 setPage(1);
                 if (query.trim()) doSearch(query, 0, EMPTY_FILTERS, 1, perPage, sort);
                 else handleClear();

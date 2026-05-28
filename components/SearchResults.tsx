@@ -159,12 +159,8 @@ export default function SearchResults({
 
       {/* Enrichment disclaimer */}
       <p className="text-xs text-gray-400 px-1 py-2 leading-relaxed">
-        Popularity scores and genre tags are being slowly built up over time.
-        Doing it all up front would take forever and cost a fortune. Songs that
-        appear in searches jump to the front of the analysis queue, so the
-        most-searched music gets fleshed out first. Initial searches may take up
-        to a second while scores are looked up in real time; results will get
-        faster as the index fills in.
+        Popularity and genre data are actively filling in — the most-searched songs get enriched first,
+        so the index improves every day.
       </p>
 
       <div className="border-t border-gray-100 mb-1" />

@@ -65,7 +65,7 @@ export default function TrackCard({ track, exactDuration, tolerance = 0 }: Track
               <span className="text-gray-400 flex-shrink-0"><em>{track.release_type}</em> Release</span>
             </>
           )}
-          {track.label && (
+          {track.label && track.label !== '[no label]' && (
             <>
               <span className="text-gray-300 flex-shrink-0">·</span>
               <span className="text-gray-400 truncate">Label: {track.label}</span>
