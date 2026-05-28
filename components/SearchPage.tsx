@@ -35,6 +35,54 @@ const DECADES = [
   { label: '20s', from: '2020', to: '2029' },
 ];
 
+// ── Language selector data ─────────────────────────────────────────────────────
+const TOP_LANGUAGES = [
+  { code: 'eng', label: 'English'            },
+  { code: 'jpn', label: 'Japanese'           },
+  { code: 'deu', label: 'German'             },
+  { code: 'mul', label: 'Multiple languages' },
+  { code: 'fra', label: 'French'             },
+  { code: 'spa', label: 'Spanish'            },
+];
+const TOP_LANG_CODES = new Set(TOP_LANGUAGES.map(l => l.code));
+
+// Full ISO 639-3 list for the modal (top languages present in the DB)
+const ISO_LANGUAGE_NAMES: [string, string][] = [
+  ['afr','Afrikaans'],       ['amh','Amharic'],         ['ara','Arabic'],
+  ['ast','Asturian'],        ['aze','Azerbaijani'],      ['bam','Bambara'],
+  ['bel','Belarusian'],      ['ben','Bengali'],          ['bos','Bosnian'],
+  ['bre','Breton'],          ['bul','Bulgarian'],        ['cat','Catalan'],
+  ['ceb','Cebuano'],         ['ces','Czech'],            ['cmn','Mandarin Chinese'],
+  ['cos','Corsican'],        ['cym','Welsh'],            ['dan','Danish'],
+  ['deu','German'],          ['ell','Greek'],            ['eng','English'],
+  ['est','Estonian'],        ['eus','Basque'],           ['fas','Persian'],
+  ['fil','Filipino'],        ['fin','Finnish'],          ['fra','French'],
+  ['frc','Cajun French'],    ['gla','Scottish Gaelic'],  ['gle','Irish'],
+  ['glg','Galician'],        ['gsw','Swiss German'],     ['guj','Gujarati'],
+  ['hat','Haitian Creole'],  ['haw','Hawaiian'],         ['heb','Hebrew'],
+  ['hin','Hindi'],           ['hrv','Croatian'],         ['hun','Hungarian'],
+  ['ind','Indonesian'],      ['isl','Icelandic'],        ['ita','Italian'],
+  ['jpn','Japanese'],        ['kan','Kannada'],          ['kat','Georgian'],
+  ['kaz','Kazakh'],          ['kor','Korean'],           ['ksh','Kölsch'],
+  ['kur','Kurdish'],         ['lat','Latin'],            ['lav','Latvian'],
+  ['lit','Lithuanian'],      ['mal','Malayalam'],        ['mar','Marathi'],
+  ['mkd','Macedonian'],      ['moe','Innu-aimun'],       ['mri','Māori'],
+  ['msa','Malay'],           ['mul','Multiple languages'],['mya','Burmese'],
+  ['nld','Dutch'],           ['nno','Norwegian Nynorsk'],['nob','Norwegian Bokmål'],
+  ['non','Old Norse'],       ['nor','Norwegian'],        ['oci','Occitan'],
+  ['pan','Punjabi'],         ['pol','Polish'],           ['por','Portuguese'],
+  ['ron','Romanian'],        ['run','Rundi'],            ['rus','Russian'],
+  ['san','Sanskrit'],        ['slk','Slovak'],           ['slv','Slovenian'],
+  ['sme','Northern Sami'],   ['spa','Spanish'],          ['sqi','Albanian'],
+  ['srp','Serbian'],         ['swa','Swahili'],          ['swe','Swedish'],
+  ['tam','Tamil'],           ['tel','Telugu'],           ['tgl','Tagalog'],
+  ['tha','Thai'],            ['tmh','Tamashek'],         ['tok','Toki Pona'],
+  ['tur','Turkish'],         ['ukr','Ukrainian'],        ['urd','Urdu'],
+  ['uzb','Uzbek'],           ['vie','Vietnamese'],       ['wol','Wolof'],
+  ['yid','Yiddish'],         ['yue','Cantonese'],        ['zho','Chinese'],
+  ['zul','Zulu'],            ['zxx','No linguistic content'],
+].sort((a, b) => a[1].localeCompare(b[1]));
+
 // ── Filter state type ─────────────────────────────────────────────────────────
 interface Filters {
   titleContains:  string;
@@ -159,6 +207,8 @@ export default function SearchPage() {
   const [advArtistGender,  setAdvArtistGender]  = useState('');
   const [advArtistCountry, setAdvArtistCountry] = useState('');
   const [advLanguage,      setAdvLanguage]      = useState('');
+  const [advLangIsOther,   setAdvLangIsOther]   = useState(false);
+  const [showLangModal,    setShowLangModal]    = useState(false);
 
   const abortRef = useRef<AbortController | null>(null);
 
@@ -350,6 +400,7 @@ export default function SearchPage() {
       setAdvArtistGender(filters.artistGender);
       setAdvArtistCountry(filters.artistCountry);
       setAdvLanguage(filters.language);
+      setAdvLangIsOther(!!filters.language && !TOP_LANG_CODES.has(filters.language));
     }
   }, [advExpanded]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -507,9 +558,50 @@ export default function SearchPage() {
                   </div>
                   <div>
                     <label className="text-xs font-medium text-gray-500 mb-1 block">Language</label>
-                    <input value={advLanguage} onChange={e => setAdvLanguage(e.target.value)}
-                      onKeyDown={e => { if (e.key === 'Enter') handleAdvancedSubmit(); }}
-                      placeholder="English, Japanese…" className={ADV_INPUT} />
+                    {/* Smart language box: top-6 dropdown + "Other" → ISO text input */}
+                    <select
+                      value={advLangIsOther ? 'other' : advLanguage}
+                      onChange={e => {
+                        const v = e.target.value;
+                        if (v === 'other') {
+                          setAdvLangIsOther(true);
+                          setAdvLanguage('');
+                        } else {
+                          setAdvLangIsOther(false);
+                          setAdvLanguage(v);
+                        }
+                      }}
+                      className={`${ADV_INPUT} pr-8 cursor-pointer`}
+                    >
+                      <option value="">Any</option>
+                      {TOP_LANGUAGES.map(l => (
+                        <option key={l.code} value={l.code}>{l.label}</option>
+                      ))}
+                      <option value="other">Other…</option>
+                    </select>
+                    {advLangIsOther && (
+                      <div className="mt-1.5 space-y-1">
+                        <input
+                          value={advLanguage}
+                          onChange={e => setAdvLanguage(e.target.value.toLowerCase().slice(0, 3))}
+                          onKeyDown={e => { if (e.key === 'Enter') handleAdvancedSubmit(); }}
+                          placeholder="e.g. kor"
+                          maxLength={3}
+                          className={`${ADV_INPUT} font-mono w-24`}
+                          autoFocus
+                        />
+                        <p className="text-xs text-gray-400">
+                          ISO 639-3 code (3 letters).{' '}
+                          <button
+                            type="button"
+                            onClick={() => setShowLangModal(true)}
+                            className="underline hover:text-blue-500 transition-colors"
+                          >
+                            Full list
+                          </button>
+                        </p>
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -613,6 +705,7 @@ export default function SearchPage() {
                         setAdvExact(''); setAdvFrom(''); setAdvTo('');
                         setAdvArtistType(''); setAdvArtistGender('');
                         setAdvArtistCountry(''); setAdvLanguage('');
+                        setAdvLangIsOther(false);
                         setAdvSummary([]);
                       }}
                       className="text-xs text-gray-400 hover:text-red-500 transition-colors"
@@ -744,6 +837,54 @@ export default function SearchPage() {
           </div>
         )}
       </main>
+
+      {/* ── ISO Language modal ─────────────────────────────────────────────── */}
+      {showLangModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4"
+          onClick={() => setShowLangModal(false)}
+        >
+          <div
+            className="bg-white rounded-xl shadow-xl w-full max-w-md flex flex-col"
+            style={{ maxHeight: '70vh' }}
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 flex-shrink-0">
+              <div>
+                <h2 className="text-sm font-semibold text-gray-800">ISO 639-3 language codes</h2>
+                <p className="text-xs text-gray-400 mt-0.5">Click a language to select it</p>
+              </div>
+              <button
+                onClick={() => setShowLangModal(false)}
+                className="text-gray-400 hover:text-gray-600 transition-colors text-lg leading-none"
+              >✕</button>
+            </div>
+            <div className="overflow-y-auto flex-1 px-3 py-3">
+              <div className="grid grid-cols-2 gap-0.5">
+                {ISO_LANGUAGE_NAMES.map(([code, name]) => (
+                  <button
+                    key={code}
+                    onClick={() => {
+                      setAdvLanguage(code);
+                      setAdvLangIsOther(true);
+                      setShowLangModal(false);
+                    }}
+                    className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-left hover:bg-blue-50 transition-colors group ${
+                      advLanguage === code ? 'bg-blue-50' : ''
+                    }`}
+                  >
+                    <span className="font-mono text-xs text-gray-400 group-hover:text-blue-500 w-7 flex-shrink-0">{code}</span>
+                    <span className="text-xs text-gray-700 truncate">{name}</span>
+                  </button>
+                ))}
+              </div>
+              <p className="text-xs text-gray-300 text-center mt-3 pb-1">
+                Showing top 93 languages by track count · additional rare codes can be typed directly
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
 
       <footer className="text-center text-xs text-gray-300 py-4 border-t border-gray-100">
         Track data from{' '}
