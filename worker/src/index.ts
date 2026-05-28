@@ -40,6 +40,86 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | null> {
   ]);
 }
 
+// ── Spotify circuit breaker + logging ─────────────────────────────────────────
+
+// Circuit states:
+//   'open'      – running normally
+//   'half_open' – backoff elapsed, attempting cautious resume
+//   'closed'    – backed off, skipping until backoff_until elapses
+
+async function getConfig(db: D1Database, key: string): Promise<string | null> {
+  const row = await db.prepare('SELECT value FROM spotify_config WHERE key = ?')
+    .bind(key).first<{ value: string }>();
+  return row?.value ?? null;
+}
+
+async function setConfig(db: D1Database, key: string, value: string): Promise<void> {
+  await db.prepare(
+    'INSERT INTO spotify_config (key, value, updated) VALUES (?, ?, ?) ' +
+    'ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated = excluded.updated'
+  ).bind(key, value, Date.now()).run();
+}
+
+async function logRun(db: D1Database, source: string, stats: {
+  attempted: number; scored: number; notFound: number; err429: number; errOther: number;
+}): Promise<void> {
+  await db.prepare(
+    'INSERT INTO spotify_log (ts, source, attempted, scored, not_found, err_429, err_other) VALUES (?, ?, ?, ?, ?, ?, ?)'
+  ).bind(Date.now(), source, stats.attempted, stats.scored, stats.notFound, stats.err429, stats.errOther).run();
+  // Keep only the last 200 rows
+  await db.prepare(
+    'DELETE FROM spotify_log WHERE id NOT IN (SELECT id FROM spotify_log ORDER BY ts DESC LIMIT 200)'
+  ).run();
+}
+
+// Backoff schedule per consecutive 429 offense: 1→10m, 2→30m, 3→1h, 4+→6h
+function backoffMs(consecutive: number): number {
+  if (consecutive <= 1) return 10 * 60 * 1000;
+  if (consecutive === 2) return 30 * 60 * 1000;
+  if (consecutive === 3) return 60 * 60 * 1000;
+  return 6 * 60 * 60 * 1000;
+}
+
+async function checkCircuit(env: Env): Promise<'run' | 'skip'> {
+  const state = await getConfig(env.DB, 'circuit_state') ?? 'open';
+  if (state === 'open') return 'run';
+
+  const backoffUntilStr = await getConfig(env.DB, 'backoff_until');
+  if (backoffUntilStr && Date.now() < parseInt(backoffUntilStr)) {
+    const remaining = Math.round((parseInt(backoffUntilStr) - Date.now()) / 60000);
+    console.log(`Spotify circuit ${state} — ${remaining}m remaining on backoff, skipping`);
+    return 'skip';
+  }
+
+  // Backoff elapsed — cautious resume
+  await setConfig(env.DB, 'circuit_state', 'half_open');
+  console.log('Spotify circuit half_open — backoff elapsed, attempting resume');
+  return 'run';
+}
+
+async function updateCircuit(env: Env, stats: {
+  err429: number; errOther: number; scored: number; attempted: number;
+}): Promise<void> {
+  if (stats.err429 > 0) {
+    const consecutive = parseInt(await getConfig(env.DB, 'consecutive_429s') ?? '0') + 1;
+    const wait        = backoffMs(consecutive);
+    await setConfig(env.DB, 'consecutive_429s', String(consecutive));
+    await setConfig(env.DB, 'backoff_until',    String(Date.now() + wait));
+    await setConfig(env.DB, 'circuit_state',    'closed');
+    console.error(`Spotify 429 detected — circuit closed. Offense #${consecutive}, backing off ${wait / 60000}min`);
+  } else if (stats.attempted > 0 && stats.scored === 0 && stats.errOther >= stats.attempted) {
+    // Every single lookup failed — likely auth issue or Spotify outage
+    await setConfig(env.DB, 'circuit_state',    'closed');
+    await setConfig(env.DB, 'backoff_until',    String(Date.now() + 60 * 60 * 1000)); // 1h
+    await setConfig(env.DB, 'consecutive_429s', '0');
+    console.error('Spotify all-errors run — circuit closed 1h (possible auth failure or outage)');
+  } else {
+    // Clean run — open circuit and reset counter
+    await setConfig(env.DB, 'circuit_state',    'open');
+    await setConfig(env.DB, 'consecutive_429s', '0');
+  }
+}
+
 // ── Spotify ───────────────────────────────────────────────────────────────────
 
 async function getSpotifyToken(env: Env): Promise<string | null> {
@@ -61,20 +141,26 @@ async function getSpotifyToken(env: Env): Promise<string | null> {
   }
 }
 
-async function spotifyLookup(isrc: string, token: string): Promise<number | null> {
+interface LookupResult {
+  pop:     number | null;  // null = error; -1 = not on Spotify; 0–100 = score
+  is429:   boolean;
+  isError: boolean;
+}
+
+async function spotifyLookup(isrc: string, token: string): Promise<LookupResult> {
   try {
     const res = await fetch(
       `https://api.spotify.com/v1/search?q=isrc:${encodeURIComponent(isrc)}&type=track&limit=1`,
       { headers: { 'Authorization': `Bearer ${token}` } }
     );
-    if (res.status === 429) { res.body?.cancel(); return null; }
-    if (!res.ok)            { res.body?.cancel(); return null; }
+    if (res.status === 429) { res.body?.cancel(); return { pop: null, is429: true,  isError: false }; }
+    if (!res.ok)            { res.body?.cancel(); return { pop: null, is429: false, isError: true  }; }
     const data  = await res.json() as { tracks: { items: Array<{ popularity: number }> } };
     const items = data.tracks?.items;
-    if (!items || items.length === 0) return -1;
-    return items[0].popularity ?? 0;
+    if (!items || items.length === 0) return { pop: -1,         is429: false, isError: false };
+    return                                   { pop: items[0].popularity ?? 0, is429: false, isError: false };
   } catch {
-    return null;
+    return { pop: null, is429: false, isError: true };
   }
 }
 
@@ -86,38 +172,51 @@ interface TrackRow {
   [key: string]: unknown;
 }
 
+interface EnrichStats {
+  attempted: number;
+  scored:    number;
+  notFound:  number;
+  err429:    number;
+  errOther:  number;
+}
+
 async function enrichWithSpotify(
   tracks:    TrackRow[],
   token:     string,
   env:       Env,
   batchSize: number,
   delayMs:   number,
-): Promise<void> {
-  const needs = tracks.filter(t => t.isrc && t.popularity == null);
+): Promise<EnrichStats> {
+  const needs  = tracks.filter(t => t.isrc && t.popularity == null);
+  const stats: EnrichStats = { attempted: needs.length, scored: 0, notFound: 0, err429: 0, errOther: 0 };
 
   for (let i = 0; i < needs.length; i += batchSize) {
     const batch = needs.slice(i, i + batchSize);
     await Promise.all(batch.map(async t => {
-      const score = await spotifyLookup(t.isrc!, token);
-      if (score !== null) {
-        t.popularity = score;
-        env.DB.prepare('UPDATE tracks SET popularity = ? WHERE mb_id = ?')
-          .bind(score, t.mb_id)
-          .run()
-          .catch(() => {});
-      }
+      const r = await spotifyLookup(t.isrc!, token);
+      if (r.is429)   { stats.err429++;  return; }
+      if (r.isError) { stats.errOther++; return; }
+      if (r.pop === null) return;
+      if (r.pop === -1)   { stats.notFound++; t.popularity = -1; }
+      else                { stats.scored++;   t.popularity = r.pop; }
+      env.DB.prepare('UPDATE tracks SET popularity = ? WHERE mb_id = ?')
+        .bind(r.pop, t.mb_id).run().catch(() => {});
     }));
+
+    if (stats.err429 > 0) break; // stop immediately on rate limit
+
     if (delayMs > 0 && i + batchSize < needs.length) {
       await new Promise(r => setTimeout(r, delayMs));
     }
   }
+
+  return stats;
 }
 
 // ── MusicBrainz genre enrichment ──────────────────────────────────────────────
 
 async function enrichGenre(tracks: TrackRow[], env: Env): Promise<void> {
   const needs = tracks.filter(t => t.mb_id && t.genre == null).slice(0, 5);
-
   for (const track of needs) {
     await new Promise(r => setTimeout(r, 1100));
     try {
@@ -133,13 +232,10 @@ async function enrichGenre(tracks: TrackRow[], env: Env): Promise<void> {
         if (topTag) {
           track.genre = topTag;
           await env.DB.prepare('UPDATE tracks SET genre = ? WHERE mb_id = ?')
-            .bind(topTag, track.mb_id)
-            .run();
+            .bind(topTag, track.mb_id).run();
         }
       }
-    } catch {
-      // best-effort
-    }
+    } catch { /* best-effort */ }
   }
 }
 
@@ -153,46 +249,18 @@ interface Filters {
   label?:       string;
 }
 
-/**
- * Returns SQL condition fragments and their bound values for the active filters.
- * alias: 't' for FTS-join queries, '' for direct queries.
- */
-function buildFilterClauses(
-  f: Filters,
-  alias: string,
-): { sql: string; params: unknown[] } {
-  const p    = alias ? `${alias}.` : '';
-  const conds: string[] = [];
+function buildFilterClauses(f: Filters, alias: string): { sql: string; params: unknown[] } {
+  const p     = alias ? `${alias}.` : '';
+  const conds: string[]  = [];
   const vals:  unknown[] = [];
-
-  if (f.genre) {
-    conds.push(`${p}genre LIKE ?`);
-    vals.push(`%${f.genre}%`);
-  }
-  if (f.yearFrom != null) {
-    conds.push(`${p}release_year >= ?`);
-    vals.push(f.yearFrom);
-  }
-  if (f.yearTo != null) {
-    conds.push(`${p}release_year <= ?`);
-    vals.push(f.yearTo);
-  }
-  if (f.releaseType) {
-    conds.push(`${p}release_type = ?`);
-    vals.push(f.releaseType);
-  }
-  if (f.label) {
-    conds.push(`${p}label LIKE ?`);
-    vals.push(`%${f.label}%`);
-  }
-
-  return {
-    sql:    conds.length ? ' AND ' + conds.join(' AND ') : '',
-    params: vals,
-  };
+  if (f.genre)            { conds.push(`${p}genre LIKE ?`);        vals.push(`%${f.genre}%`); }
+  if (f.yearFrom != null) { conds.push(`${p}release_year >= ?`);   vals.push(f.yearFrom); }
+  if (f.yearTo   != null) { conds.push(`${p}release_year <= ?`);   vals.push(f.yearTo); }
+  if (f.releaseType)      { conds.push(`${p}release_type = ?`);    vals.push(f.releaseType); }
+  if (f.label)            { conds.push(`${p}label LIKE ?`);        vals.push(`%${f.label}%`); }
+  return { sql: conds.length ? ' AND ' + conds.join(' AND ') : '', params: vals };
 }
 
-/** Build the ORDER BY clause based on sort mode and whether FTS join is used. */
 function buildOrderBy(sort: string, fts: boolean): string {
   const p = fts ? 't.' : '';
   if (sort === 'asc')  return `ORDER BY ${p}duration_ms ASC`;
@@ -202,12 +270,7 @@ function buildOrderBy(sort: string, fts: boolean): string {
     : 'ORDER BY COALESCE(popularity, -2) DESC, duration_ms';
 }
 
-/** Build the duration WHERE fragment (handles open-ended ranges). */
-function buildDurationClause(
-  alias:       string,
-  minDuration: number | null,
-  maxDuration: number | null,
-): { sql: string; params: unknown[] } {
+function buildDurationClause(alias: string, minDuration: number | null, maxDuration: number | null): { sql: string; params: unknown[] } {
   const p = alias ? `${alias}.` : '';
   if (minDuration != null && maxDuration != null) {
     return { sql: `${p}duration_ms BETWEEN ? AND ?`, params: [minDuration, maxDuration] };
@@ -222,18 +285,38 @@ function buildDurationClause(
 
 export default {
 
-  async fetch(
-    request: Request,
-    env:     Env,
-    ctx:     ExecutionContext,
-  ): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     if (request.method === 'OPTIONS') return new Response(null, { headers: CORS_HEADERS });
 
-    const url       = new URL(request.url);
+    const url = new URL(request.url);
+
+    // ── /status — Spotify health check ───────────────────────────────────────
+    if (url.pathname === '/status') {
+      const [configRows, logRows] = await Promise.all([
+        env.DB.prepare('SELECT key, value, updated FROM spotify_config ORDER BY key').all(),
+        env.DB.prepare('SELECT * FROM spotify_log ORDER BY ts DESC LIMIT 50').all(),
+      ]);
+      const config: Record<string, string> = {};
+      for (const row of (configRows.results ?? []) as { key: string; value: string }[]) {
+        config[row.key] = row.value;
+      }
+      const backoffUntil = config['backoff_until'] ? parseInt(config['backoff_until']) : null;
+      const backingOff   = backoffUntil != null && Date.now() < backoffUntil;
+      return json({
+        circuit:              config['circuit_state'] ?? 'open',
+        consecutive429s:      parseInt(config['consecutive_429s'] ?? '0'),
+        backingOff,
+        backoffUntil:         backoffUntil ? new Date(backoffUntil).toISOString() : null,
+        backoffRemainingMin:  backingOff ? Math.round((backoffUntil! - Date.now()) / 60000) : 0,
+        recentRuns:           logRows.results ?? [],
+      });
+    }
+
+    if (url.pathname !== '/search') return json({ error: 'Not found' }, 404);
+
     const q         = url.searchParams.get('q') ?? '';
     const tolerance = parseInt(url.searchParams.get('tolerance') ?? '0', 10) || 0;
 
-    // ── Optional filters ──────────────────────────────────────────────────────
     const genre       = url.searchParams.get('genre')        || undefined;
     const yearFromRaw = url.searchParams.get('year_from');
     const yearToRaw   = url.searchParams.get('year_to');
@@ -245,27 +328,20 @@ export default {
     const filters: Filters = { genre, yearFrom, yearTo, releaseType, label };
     const hasFilters = !!(genre || yearFrom != null || yearTo != null || releaseType || label);
 
-    // ── Pagination + sort ─────────────────────────────────────────────────────
     const page    = Math.max(1, Math.min(500, parseInt(url.searchParams.get('page')     ?? '1',  10) || 1));
     const perPage = Math.max(1, Math.min(200, parseInt(url.searchParams.get('per_page') ?? '50', 10) || 50));
     const sortRaw = url.searchParams.get('sort') ?? 'relevance';
     const sort    = ['relevance', 'asc', 'desc'].includes(sortRaw) ? sortRaw : 'relevance';
     const offset  = (page - 1) * perPage;
 
-    if (url.pathname !== '/search') return json({ error: 'Not found' }, 404);
-
-    const parsed = parseQuery(q);
-
-    // Sanitize FTS upfront — catches *, spaces, and special-char-only inputs
+    const parsed       = parseQuery(q);
     const effectiveFts = parsed.keywords ? sanitizeForFts(parsed.keywords) : '';
     const hasKeywords  = !!effectiveFts;
 
-    // Bail early only if there's truly nothing to search on
     if (!hasKeywords && parsed.exactDuration == null && parsed.minDuration == null && parsed.maxDuration == null && !hasFilters) {
       return json({ tracks: [], total: 0, page, perPage, hasMore: false });
     }
 
-    // ── Resolve duration bounds ───────────────────────────────────────────────
     let minDuration: number | null = null;
     let maxDuration: number | null = null;
 
@@ -275,7 +351,6 @@ export default {
     } else if (parsed.minDuration != null || parsed.maxDuration != null) {
       minDuration = parsed.minDuration ?? null;
       maxDuration = parsed.maxDuration ?? null;
-      // Widen by tolerance on whichever bound exists
       if (tolerance > 0) {
         if (minDuration != null) minDuration -= tolerance;
         if (maxDuration != null) maxDuration += tolerance;
@@ -348,7 +423,6 @@ export default {
         `).bind(...dir.params);
       }
 
-      // Run data + count queries in parallel
       const [result, countResult] = await Promise.all([
         dataStmt.all(),
         countStmt.first<{ n: number }>(),
@@ -361,19 +435,31 @@ export default {
       const totalCapped = rawCount > 10000;
       const total       = Math.min(rawCount, 10000);
 
-      // ── Spotify enrichment: score first 8 unenriched tracks inline ───────
+      // ── Inline Spotify enrichment — circuit breaker aware ─────────────────
       if ((hasKeywords || hasFilters) && tracks.length > 0 && env.SPOTIFY_CLIENT_ID) {
-        const token = await withTimeout(getSpotifyToken(env), 800);
-        if (token) {
-          const inline = tracks.filter(t => t.isrc && t.popularity == null).slice(0, 8);
-          await withTimeout(enrichWithSpotify(inline, token, env, 4, 0), 700);
-          if (sort === 'relevance') {
-            tracks.sort((a, b) => (b.popularity ?? -2) - (a.popularity ?? -2));
+        const state       = await getConfig(env.DB, 'circuit_state') ?? 'open';
+        const backoffStr  = await getConfig(env.DB, 'backoff_until');
+        const circuitOpen = state === 'open' ||
+          (state !== 'open' && backoffStr != null && Date.now() >= parseInt(backoffStr));
+
+        if (circuitOpen) {
+          const token = await withTimeout(getSpotifyToken(env), 800);
+          if (token) {
+            const inline = tracks.filter(t => t.isrc && t.popularity == null).slice(0, 8);
+            if (inline.length > 0) {
+              const stats = await withTimeout(enrichWithSpotify(inline, token, env, 4, 0), 700) as EnrichStats | null;
+              if (stats) {
+                ctx.waitUntil(logRun(env.DB, 'inline', stats));
+                if (stats.err429 > 0) ctx.waitUntil(updateCircuit(env, stats));
+              }
+            }
+            if (sort === 'relevance') {
+              tracks.sort((a, b) => (b.popularity ?? -2) - (a.popularity ?? -2));
+            }
           }
         }
       }
 
-      // ── Background genre enrichment ───────────────────────────────────────
       ctx.waitUntil(enrichGenre(tracks, env));
 
       return json({
@@ -402,18 +488,20 @@ export default {
     }
   },
 
-  // ── Cron: background Spotify enrichment ────────────────────────────────────
+  // ── Cron: background Spotify enrichment ──────────────────────────────────────
 
-  async scheduled(
-    _event: ScheduledEvent,
-    env:    Env,
-    _ctx:   ExecutionContext,
-  ): Promise<void> {
+  async scheduled(_event: ScheduledEvent, env: Env, _ctx: ExecutionContext): Promise<void> {
     if (!env.SPOTIFY_CLIENT_ID) return;
+
+    const decision = await checkCircuit(env);
+    if (decision === 'skip') return;
 
     const token = await getSpotifyToken(env);
     if (!token) {
       console.error('Cron: failed to get Spotify token');
+      const stats = { attempted: 0, scored: 0, notFound: 0, err429: 0, errOther: 1 };
+      await logRun(env.DB, 'cron', stats);
+      await updateCircuit(env, { ...stats, attempted: 1 });
       return;
     }
 
@@ -431,7 +519,9 @@ export default {
     }
 
     console.log(`Cron: enriching ${tracks.length} tracks`);
-    await enrichWithSpotify(tracks, token, env, 4, 1000);
-    console.log('Cron: done');
+    const stats = await enrichWithSpotify(tracks, token, env, 4, 1000);
+    await logRun(env.DB, 'cron', stats);
+    await updateCircuit(env, stats);
+    console.log(`Cron: scored ${stats.scored} · not found ${stats.notFound} · 429s ${stats.err429} · errors ${stats.errOther}`);
   },
 };
