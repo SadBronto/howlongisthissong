@@ -35,8 +35,9 @@ const API_TOKEN   = process.env.CLOUDFLARE_API_TOKEN!;
 const DATABASE_ID = process.env.CLOUDFLARE_D1_DATABASE_ID!;
 const LASTFM_KEY  = process.env.LASTFM_API_KEY ?? '';
 
-const MANUAL_FILE = path.join(process.cwd(), 'fix_durations_manual.tsv');
-const BAR_WIDTH   = 32;
+const MANUAL_FILE  = path.join(process.cwd(), 'fix_durations_manual.tsv');
+const BAR_WIDTH    = 32;
+const ITUNES_CONC  = 15;  // concurrent iTunes lookups — no meaningful rate limit
 
 // ── D1 helpers ─────────────────────────────────────────────────────────────────
 
@@ -182,50 +183,59 @@ async function main() {
 
   const stats   = { itunes: 0, lastfm: 0, confirmed: 0, manual: 0 };
   const startMs = Date.now();
+  const lfmQueue: TrackRow[] = [];
+  let done = 0;
 
-  for (let i = 0; i < tracks.length; i++) {
-    const { mb_id, title, artist, duration_ms } = tracks[i];
-    const art = artist ?? '';
-
-    renderBar(i, tracks.length, startMs);
-
-    // ── 1. iTunes ──────────────────────────────────────────────────────────────
-    const itunesMs = await tryItunes(title, art);
+  // ── Pass 1: iTunes — 15 concurrent, no rate limit ─────────────────────────
+  const active = new Map<symbol, Promise<void>>();
+  async function runItunes(track: TrackRow): Promise<void> {
+    const art      = track.artist ?? '';
+    const itunesMs = await tryItunes(track.title, art);
     if (itunesMs !== null) {
-      if (itunesMs !== duration_ms) {
-        await d1Raw(`UPDATE tracks SET duration_ms = ${itunesMs} WHERE mb_id = '${mb_id}'`);
+      if (itunesMs !== track.duration_ms) {
+        await d1Raw(`UPDATE tracks SET duration_ms = ${itunesMs} WHERE mb_id = '${track.mb_id}'`);
         stats.itunes++;
-      } else {
-        stats.confirmed++;  // external source agrees — track is genuinely this long
-      }
-      await sleep(150);
-      continue;
-    }
-
-    await sleep(150);
-
-    // ── 2. Last.fm ─────────────────────────────────────────────────────────────
-    const lastfmMs = await tryLastfm(title, art);
-    if (lastfmMs !== null) {
-      if (lastfmMs !== duration_ms) {
-        await d1Raw(`UPDATE tracks SET duration_ms = ${lastfmMs} WHERE mb_id = '${mb_id}'`);
-        stats.lastfm++;
       } else {
         stats.confirmed++;
       }
-      await sleep(1100);  // respect Last.fm rate limit
-      continue;
+    } else {
+      lfmQueue.push(track);
     }
-
-    await sleep(150);
-
-    // ── 3. Manual review ───────────────────────────────────────────────────────
-    manual.write(`${mb_id}\t${title}\t${art}\t${duration_ms}\t${fmtMs(duration_ms)}\n`);
-    stats.manual++;
+    renderBar(++done, tracks.length, startMs);
   }
 
-  renderBar(tracks.length, tracks.length, startMs);
+  for (const track of tracks) {
+    const key = Symbol();
+    const p   = runItunes(track).finally(() => active.delete(key));
+    active.set(key, p);
+    if (active.size >= ITUNES_CONC) await Promise.race(active.values());
+  }
+  await Promise.all(active.values());
   process.stdout.write('\n');
+
+  // ── Pass 2: Last.fm — sequential, 1.1 s between calls ─────────────────────
+  if (lfmQueue.length > 0) {
+    console.log(`\n  iTunes missed ${lfmQueue.length} tracks — trying Last.fm…`);
+    for (let i = 0; i < lfmQueue.length; i++) {
+      const { mb_id, title, artist, duration_ms } = lfmQueue[i];
+      const art      = artist ?? '';
+      const lastfmMs = await tryLastfm(title, art);
+      if (lastfmMs !== null) {
+        if (lastfmMs !== duration_ms) {
+          await d1Raw(`UPDATE tracks SET duration_ms = ${lastfmMs} WHERE mb_id = '${mb_id}'`);
+          stats.lastfm++;
+        } else {
+          stats.confirmed++;
+        }
+      } else {
+        manual.write(`${mb_id}\t${title}\t${art}\t${duration_ms}\t${fmtMs(duration_ms)}\n`);
+        stats.manual++;
+      }
+      process.stdout.write(`\r  Last.fm: ${i + 1}/${lfmQueue.length}   `);
+      await sleep(1100);
+    }
+    process.stdout.write('\n');
+  }
   await new Promise<void>((res, rej) => manual.end(err => err ? rej(err) : res()));
 
   const elapsed = ((Date.now() - startMs) / 1000).toFixed(0);
