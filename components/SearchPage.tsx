@@ -899,6 +899,9 @@ export default function SearchPage() {
         Track data from{' '}
         <a href="https://musicbrainz.org" target="_blank" rel="noopener noreferrer"
           className="underline hover:text-gray-500 transition-colors">MusicBrainz</a>
+        {' '}· Audio analysis from{' '}
+        <a href="https://acousticbrainz.org" target="_blank" rel="noopener noreferrer"
+          className="underline hover:text-gray-500 transition-colors">AcousticBrainz</a>
         {' '}· Popularity from{' '}
         <a href="https://www.last.fm" target="_blank" rel="noopener noreferrer"
           className="underline hover:text-gray-500 transition-colors">Last.fm</a>
