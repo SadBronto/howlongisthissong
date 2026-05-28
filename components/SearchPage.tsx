@@ -96,11 +96,14 @@ interface Filters {
   artistGender:   string;
   artistCountry:  string;
   language:       string;
+  bpmMin:         string;
+  bpmMax:         string;
 }
 const EMPTY_FILTERS: Filters = {
   titleContains: '', artistContains: '',
   genre: '', yearFrom: '', yearTo: '', releaseType: '', label: '',
   artistType: '', artistGender: '', artistCountry: '', language: '',
+  bpmMin: '', bpmMax: '',
 };
 
 function filtersFromParams(sp: URLSearchParams): Filters {
@@ -116,6 +119,8 @@ function filtersFromParams(sp: URLSearchParams): Filters {
     artistGender:   sp.get('artist_gender')  ?? '',
     artistCountry:  sp.get('artist_country') ?? '',
     language:       sp.get('language')       ?? '',
+    bpmMin:         sp.get('bpm_min')        ?? '',
+    bpmMax:         sp.get('bpm_max')        ?? '',
   };
 }
 
@@ -133,6 +138,8 @@ function buildUrl(q: string, f: Filters, pg: number, pp: number, s: string): str
   if (f.artistGender)   p.set('artist_gender',  f.artistGender);
   if (f.artistCountry)  p.set('artist_country', f.artistCountry);
   if (f.language)       p.set('language',       f.language);
+  if (f.bpmMin)         p.set('bpm_min',        f.bpmMin);
+  if (f.bpmMax)         p.set('bpm_max',        f.bpmMax);
   if (pg > 1)           p.set('page',           String(pg));
   if (pp !== 50)        p.set('per_page',       String(pp));
   if (s !== 'relevance') p.set('sort',          s);
@@ -145,6 +152,7 @@ function activeCount(f: Filters): number {
     f.titleContains, f.artistContains, f.genre,
     f.yearFrom || f.yearTo,   // range counts as one filter
     f.releaseType, f.label, f.artistType, f.artistGender, f.artistCountry, f.language,
+    f.bpmMin || f.bpmMax,     // range counts as one filter
   ].filter(Boolean).length;
 }
 
@@ -209,6 +217,8 @@ export default function SearchPage() {
   const [advLanguage,      setAdvLanguage]      = useState('');
   const [advLangIsOther,   setAdvLangIsOther]   = useState(false);
   const [showLangModal,    setShowLangModal]    = useState(false);
+  const [advBpmMin,        setAdvBpmMin]        = useState('');
+  const [advBpmMax,        setAdvBpmMax]        = useState('');
 
   const abortRef        = useRef<AbortController | null>(null);
   const scrollToTopRef  = useRef(false);
@@ -247,6 +257,8 @@ export default function SearchPage() {
       if (f.artistGender)     params.set('artist_gender',  f.artistGender);
       if (f.artistCountry)    params.set('artist_country', f.artistCountry);
       if (f.language)         params.set('language',       f.language);
+      if (f.bpmMin)           params.set('bpm_min',        f.bpmMin);
+      if (f.bpmMax)           params.set('bpm_max',        f.bpmMax);
       params.set('page',     String(pg));
       params.set('per_page', String(pp));
       if (s !== 'relevance') params.set('sort', s);
@@ -356,6 +368,8 @@ export default function SearchPage() {
       artistGender:   advArtistGender,
       artistCountry:  advArtistCountry,
       language:       advLanguage,
+      bpmMin:         advBpmMin.trim(),
+      bpmMax:         advBpmMax.trim(),
     };
     if (!compiled && activeCount(newFilters) === 0) return;
     setQuery(compiled);
@@ -380,11 +394,13 @@ export default function SearchPage() {
     if (advArtistGender)  summary.push('Gender');
     if (advArtistCountry) summary.push('Country');
     if (advLanguage)      summary.push('Language');
+    if (advBpmMin || advBpmMax) summary.push('BPM');
     setAdvSummary(summary);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [advTitle, advArtist, advDurMode, advExact, advFrom, advTo,
       advGenre, advYearFrom, advYearTo, advRelType, advLabel,
       advArtistType, advArtistGender, advArtistCountry, advLanguage,
+      advBpmMin, advBpmMax,
       perPage, sort, doSearch, router]);
 
   // Sync advanced filter fields from main filter state when advanced opens
@@ -402,6 +418,8 @@ export default function SearchPage() {
       setAdvArtistCountry(filters.artistCountry);
       setAdvLanguage(filters.language);
       setAdvLangIsOther(!!filters.language && !TOP_LANG_CODES.has(filters.language));
+      setAdvBpmMin(filters.bpmMin);
+      setAdvBpmMax(filters.bpmMax);
     }
   }, [advExpanded]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -695,6 +713,20 @@ export default function SearchPage() {
                   )}
                 </div>
 
+                {/* BPM */}
+                <div>
+                  <label className="text-xs font-medium text-gray-500 mb-1 block">BPM</label>
+                  <div className="flex items-center gap-2">
+                    <input value={advBpmMin} onChange={e => setAdvBpmMin(e.target.value.replace(/\D/g, ''))}
+                      onKeyDown={e => { if (e.key === 'Enter') handleAdvancedSubmit(); }}
+                      placeholder="Min" className={`${ADV_INPUT} w-24`} maxLength={3} inputMode="numeric" />
+                    <span className="text-xs text-gray-400 flex-shrink-0">to</span>
+                    <input value={advBpmMax} onChange={e => setAdvBpmMax(e.target.value.replace(/\D/g, ''))}
+                      onKeyDown={e => { if (e.key === 'Enter') handleAdvancedSubmit(); }}
+                      placeholder="Max" className={`${ADV_INPUT} w-24`} maxLength={3} inputMode="numeric" />
+                  </div>
+                </div>
+
                 {/* Actions */}
                 <div className="flex items-center gap-3">
                   <button
@@ -705,7 +737,8 @@ export default function SearchPage() {
                   </button>
                   {(advGenre || advYearFrom || advYearTo || advRelType || advLabel ||
                     advTitle || advArtist || advExact || advFrom || advTo ||
-                    advArtistType || advArtistGender || advArtistCountry || advLanguage) && (
+                    advArtistType || advArtistGender || advArtistCountry || advLanguage ||
+                    advBpmMin || advBpmMax) && (
                     <button
                       onClick={() => {
                         setAdvGenre(''); setAdvYearFrom(''); setAdvYearTo('');
@@ -715,6 +748,7 @@ export default function SearchPage() {
                         setAdvArtistType(''); setAdvArtistGender('');
                         setAdvArtistCountry(''); setAdvLanguage('');
                         setAdvLangIsOther(false);
+                        setAdvBpmMin(''); setAdvBpmMax('');
                         setAdvSummary([]);
                       }}
                       className="text-xs text-gray-400 hover:text-red-500 transition-colors"
@@ -783,6 +817,13 @@ export default function SearchPage() {
                 lang: {filters.language}
               </span>
             )}
+            {(filters.bpmMin || filters.bpmMax) && (
+              <span className="text-xs bg-blue-50 text-blue-700 border border-blue-200 px-2 py-0.5 rounded-full">
+                {filters.bpmMin && filters.bpmMax
+                  ? `${filters.bpmMin}–${filters.bpmMax} BPM`
+                  : filters.bpmMin ? `≥${filters.bpmMin} BPM` : `≤${filters.bpmMax} BPM`}
+              </span>
+            )}
             <button
               onClick={() => {
                 setFilters(EMPTY_FILTERS);
@@ -820,6 +861,12 @@ export default function SearchPage() {
           <p className="text-center text-sm text-gray-400 mt-10">
             Press <kbd className="px-1.5 py-0.5 text-xs font-mono bg-gray-100 border border-gray-200 rounded">Enter</kbd>{' '}
             or click <strong className="font-medium text-gray-500">Search</strong> to find songs.
+          </p>
+        )}
+
+        {(filters.bpmMin || filters.bpmMax) && (
+          <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mt-3">
+            BPM values are algorithmically detected and may be imprecise.
           </p>
         )}
 

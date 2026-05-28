@@ -96,6 +96,8 @@ interface Filters {
   artistGender?:   string;
   artistCountry?:  string;
   language?:       string;
+  bpmMin?:         number;
+  bpmMax?:         number;
 }
 
 function buildFilterClauses(f: Filters, alias: string): { sql: string; params: unknown[] } {
@@ -113,6 +115,8 @@ function buildFilterClauses(f: Filters, alias: string): { sql: string; params: u
   if (f.artistGender)     { conds.push(`${p}artist_gender = ?`);     vals.push(f.artistGender); }
   if (f.artistCountry)    { conds.push(`${p}artist_country LIKE ?`); vals.push(`%${f.artistCountry}%`); }
   if (f.language)         { conds.push(`${p}language LIKE ?`);       vals.push(`%${f.language}%`); }
+  if (f.bpmMin != null)   { conds.push(`${p}bpm >= ?`);              vals.push(f.bpmMin); }
+  if (f.bpmMax != null)   { conds.push(`${p}bpm <= ?`);              vals.push(f.bpmMax); }
   return { sql: conds.length ? ' AND ' + conds.join(' AND ') : '', params: vals };
 }
 
@@ -363,16 +367,22 @@ export default {
     const artistGender   = url.searchParams.get('artist_gender')  || undefined;
     const artistCountry  = url.searchParams.get('artist_country') || undefined;
     const language       = url.searchParams.get('language')       || undefined;
+    const bpmMinRaw      = url.searchParams.get('bpm_min');
+    const bpmMaxRaw      = url.searchParams.get('bpm_max');
+    const bpmMin         = bpmMinRaw ? parseFloat(bpmMinRaw) : undefined;
+    const bpmMax         = bpmMaxRaw ? parseFloat(bpmMaxRaw) : undefined;
 
     const filters: Filters = {
       titleContains, artistContains, genre, yearFrom, yearTo,
       releaseType, label, artistType, artistGender, artistCountry, language,
+      bpmMin, bpmMax,
     };
     const hasFilters = !!(
       titleContains || artistContains || genre ||
       yearFrom != null || yearTo != null ||
       releaseType || label ||
-      artistType || artistGender || artistCountry || language
+      artistType || artistGender || artistCountry || language ||
+      bpmMin != null || bpmMax != null
     );
 
     const page    = Math.max(1, Math.min(500, parseInt(url.searchParams.get('page')     ?? '1',  10) || 1));
@@ -523,6 +533,8 @@ export default {
           yearTo,
           releaseType,
           label,
+          bpmFrom:       bpmMin,
+          bpmTo:         bpmMax,
         },
       });
 

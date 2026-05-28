@@ -47,5 +47,7 @@ export interface SearchResult {
     yearTo?: number;
     releaseType?: string;
     label?: string;
+    bpmFrom?: number;
+    bpmTo?: number;
   };
 }
