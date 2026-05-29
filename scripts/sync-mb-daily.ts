@@ -112,11 +112,14 @@ async function setStoredSequence(seq: number): Promise<void> {
 // ── Replication packet download + parse ───────────────────────────────────────
 
 async function getMbCurrentSequence(): Promise<number> {
-  const res = await fetch(`${MB_REPL_BASE}/LATEST_REPLICATION_SEQUENCE`, {
-    headers: { 'User-Agent': MB_UA },
-  });
-  if (!res.ok) throw new Error(`MB sequence fetch failed: ${res.status}`);
-  return parseInt((await res.text()).trim(), 10);
+  // Parse the directory listing to find the highest replication packet number.
+  // MB doesn't publish a LATEST_REPLICATION_SEQUENCE file at a stable URL.
+  const res = await fetch(`${MB_REPL_BASE}/`, { headers: { 'User-Agent': MB_UA } });
+  if (!res.ok) throw new Error(`MB replication directory fetch failed: ${res.status}`);
+  const html = await res.text();
+  const matches = [...html.matchAll(/replication-(\d+)\.tar\.bz2/g)];
+  if (!matches.length) throw new Error('No replication packets found in MB directory listing');
+  return Math.max(...matches.map(m => parseInt(m[1], 10)));
 }
 
 async function downloadPacket(seq: number, dir: string): Promise<string> {
