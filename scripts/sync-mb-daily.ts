@@ -278,6 +278,10 @@ async function insertTrack(rec: MbRecording, isrc: string): Promise<number | nul
     INSERT OR IGNORE INTO tracks_fts(rowid, title, artist, album)
     VALUES (${id}, ${esc(title)}, ${esc(artist)}, ${esc(album)})
   `);
+
+  // Add to popularity queue so the cron picks it up without a full table scan
+  await d1Raw(`INSERT OR IGNORE INTO popularity_queue (track_id) VALUES (${id})`);
+
   return id;
 }
 

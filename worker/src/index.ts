@@ -267,15 +267,18 @@ async function enrichPopularityCron(env: Env): Promise<void> {
     return;
   }
 
-  // Read next batch of unscored tracks — highest search_count first so
-  // frequently searched songs get scored before obscure ones
+  // Read next batch from the pre-built popularity_queue.
+  // Costs ~100 row-reads per tick instead of a 2M-row full scan.
   const result = await env.DB.prepare(
-    `SELECT id, mb_id, title, artist FROM tracks WHERE popularity IS NULL ORDER BY search_count DESC LIMIT ${CRON_BATCH}`
+    `SELECT t.id, t.mb_id, t.title, t.artist
+     FROM popularity_queue q
+     JOIN tracks t ON t.id = q.track_id
+     LIMIT ${CRON_BATCH}`
   ).all();
 
   const rows = (result.results ?? []) as EnrichRow[];
   if (rows.length === 0) {
-    console.log('Cron: all tracks scored — nothing to do');
+    console.log('Cron: popularity queue empty — nothing to do');
     return;
   }
 
@@ -317,6 +320,10 @@ async function enrichPopularityCron(env: Env): Promise<void> {
   if (scored.length > 0) {
     await env.DB.prepare(buildPopularityUpdate(scored)).run();
   }
+
+  // Remove processed tracks from the queue
+  const processedIds = rows.map(r => r.id).join(',');
+  await env.DB.prepare(`DELETE FROM popularity_queue WHERE track_id IN (${processedIds})`).run();
 
   const lfmHits = scored.filter(r => r.source === 'lastfm').length;
   const lbHits  = scored.filter(r => r.source === 'listenbrainz').length;
