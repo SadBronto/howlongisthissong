@@ -268,13 +268,26 @@ async function enrichPopularityCron(env: Env): Promise<void> {
   }
 
   // Read next batch from the pre-built popularity_queue.
-  // Costs ~100 row-reads per tick instead of a 2M-row full scan.
-  const result = await env.DB.prepare(
+  // Two-pass: high-priority first (tracks a user searched for), then normal.
+  // A partial index on (priority = 1) makes the first query instant;
+  // the second reads the first 50 rows from the primary key — also fast.
+  let result = await env.DB.prepare(
     `SELECT t.id, t.mb_id, t.title, t.artist
      FROM popularity_queue q
      JOIN tracks t ON t.id = q.track_id
+     WHERE q.priority = 1
      LIMIT ${CRON_BATCH}`
   ).all();
+
+  if ((result.results ?? []).length === 0) {
+    result = await env.DB.prepare(
+      `SELECT t.id, t.mb_id, t.title, t.artist
+       FROM popularity_queue q
+       JOIN tracks t ON t.id = q.track_id
+       WHERE q.priority = 0
+       LIMIT ${CRON_BATCH}`
+    ).all();
+  }
 
   const rows = (result.results ?? []) as EnrichRow[];
   if (rows.length === 0) {
@@ -518,6 +531,19 @@ export default {
               `AND (popularity_source IS NULL OR popularity_source = 'unfound')`
             ).bind(credit).run().catch(() => {})
           );
+
+          // Bump queue priority for any still-unscored tracks so the cron
+          // scores them before the ~5M unscored tracks nobody has searched for.
+          const queueIds = tracks
+            .filter(t => t.popularity_source == null)
+            .map(t => t.id);
+          if (queueIds.length > 0) {
+            ctx.waitUntil(
+              env.DB.prepare(
+                `UPDATE popularity_queue SET priority = 1 WHERE track_id IN (${queueIds.join(',')})`
+              ).run().catch(() => {})
+            );
+          }
         }
       }
 
