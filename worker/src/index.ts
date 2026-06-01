@@ -405,11 +405,12 @@ export default {
       bpmMin != null || bpmMax != null
     );
 
-    const page    = Math.max(1, Math.min(500, parseInt(url.searchParams.get('page')     ?? '1',  10) || 1));
-    const perPage = Math.max(1, Math.min(200, parseInt(url.searchParams.get('per_page') ?? '50', 10) || 50));
-    const sortRaw = url.searchParams.get('sort') ?? 'relevance';
-    const sort    = ['relevance', 'asc', 'desc'].includes(sortRaw) ? sortRaw : 'relevance';
-    const offset  = (page - 1) * perPage;
+    const page       = Math.max(1, Math.min(500, parseInt(url.searchParams.get('page')     ?? '1',  10) || 1));
+    const perPage    = Math.max(1, Math.min(200, parseInt(url.searchParams.get('per_page') ?? '50', 10) || 50));
+    const sortRaw    = url.searchParams.get('sort') ?? 'relevance';
+    const sort       = ['relevance', 'asc', 'desc'].includes(sortRaw) ? sortRaw : 'relevance';
+    const offset     = (page - 1) * perPage;
+    const artistsMode = url.searchParams.get('mode') === 'artists';
 
     const parsed       = parseQuery(q);
     const effectiveFts = parsed.keywords ? sanitizeForFts(parsed.keywords) : '';
@@ -435,6 +436,84 @@ export default {
     }
 
     const hasDuration = minDuration != null || maxDuration != null;
+
+    // ── Artists mode ──────────────────────────────────────────────────────────
+    if (artistsMode) {
+      try {
+        const fts = buildFilterClauses(filters, 't');
+        const dir = buildFilterClauses(filters, '');
+
+        let dataStmt:  D1PreparedStatement;
+        let countStmt: D1PreparedStatement;
+
+        if (hasKeywords && hasDuration) {
+          const dur = buildDurationClause('t', minDuration, maxDuration);
+          dataStmt = env.DB.prepare(`
+            SELECT DISTINCT t.artist FROM tracks_fts JOIN tracks t ON t.id = tracks_fts.rowid
+            WHERE tracks_fts MATCH ? AND ${dur.sql} AND t.artist IS NOT NULL${fts.sql}
+            ORDER BY t.artist ASC LIMIT ${perPage + 1} OFFSET ${offset}
+          `).bind(effectiveFts, ...dur.params, ...fts.params);
+          countStmt = env.DB.prepare(`
+            SELECT COUNT(*) as n FROM (
+              SELECT DISTINCT t.artist FROM tracks_fts JOIN tracks t ON t.id = tracks_fts.rowid
+              WHERE tracks_fts MATCH ? AND ${dur.sql} AND t.artist IS NOT NULL${fts.sql} LIMIT 10001
+            )
+          `).bind(effectiveFts, ...dur.params, ...fts.params);
+        } else if (hasKeywords) {
+          dataStmt = env.DB.prepare(`
+            SELECT DISTINCT t.artist FROM tracks_fts JOIN tracks t ON t.id = tracks_fts.rowid
+            WHERE tracks_fts MATCH ? AND t.artist IS NOT NULL${fts.sql}
+            ORDER BY t.artist ASC LIMIT ${perPage + 1} OFFSET ${offset}
+          `).bind(effectiveFts, ...fts.params);
+          countStmt = env.DB.prepare(`
+            SELECT COUNT(*) as n FROM (
+              SELECT DISTINCT t.artist FROM tracks_fts JOIN tracks t ON t.id = tracks_fts.rowid
+              WHERE tracks_fts MATCH ? AND t.artist IS NOT NULL${fts.sql} LIMIT 10001
+            )
+          `).bind(effectiveFts, ...fts.params);
+        } else if (hasDuration) {
+          const dur = buildDurationClause('', minDuration, maxDuration);
+          dataStmt = env.DB.prepare(`
+            SELECT DISTINCT artist FROM tracks
+            WHERE ${dur.sql} AND artist IS NOT NULL${dir.sql}
+            ORDER BY artist ASC LIMIT ${perPage + 1} OFFSET ${offset}
+          `).bind(...dur.params, ...dir.params);
+          countStmt = env.DB.prepare(`
+            SELECT COUNT(*) as n FROM (
+              SELECT DISTINCT artist FROM tracks WHERE ${dur.sql} AND artist IS NOT NULL${dir.sql} LIMIT 10001
+            )
+          `).bind(...dur.params, ...dir.params);
+        } else {
+          dataStmt = env.DB.prepare(`
+            SELECT DISTINCT artist FROM tracks
+            WHERE artist IS NOT NULL${dir.sql}
+            ORDER BY artist ASC LIMIT ${perPage + 1} OFFSET ${offset}
+          `).bind(...dir.params);
+          countStmt = env.DB.prepare(`
+            SELECT COUNT(*) as n FROM (
+              SELECT DISTINCT artist FROM tracks WHERE artist IS NOT NULL${dir.sql} LIMIT 10001
+            )
+          `).bind(...dir.params);
+        }
+
+        const [result, countResult] = await Promise.all([
+          dataStmt.all(),
+          countStmt.first<{ n: number }>(),
+        ]);
+
+        const allRows    = (result.results ?? []) as { artist: string }[];
+        const hasMore    = allRows.length > perPage;
+        const artists    = allRows.slice(0, perPage).map(r => r.artist).filter(Boolean);
+        const rawCount   = countResult?.n ?? (hasMore ? perPage + 1 : artists.length);
+        const totalCapped = rawCount > 10000;
+        const total      = Math.min(rawCount, 10000);
+
+        return json({ artists, total, totalCapped, page, perPage, hasMore, mode: 'artists' });
+      } catch (err) {
+        console.error('Artists search error:', err);
+        return json({ error: 'Search failed' }, 500);
+      }
+    }
 
     try {
       const fts = buildFilterClauses(filters, 't');

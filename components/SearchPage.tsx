@@ -124,9 +124,10 @@ function filtersFromParams(sp: URLSearchParams): Filters {
   };
 }
 
-function buildUrl(q: string, f: Filters, pg: number, pp: number, s: string): string {
+function buildUrl(q: string, f: Filters, pg: number, pp: number, s: string, am = false): string {
   const p = new URLSearchParams();
   if (q)                p.set('q',             q);
+  if (am)               p.set('mode',          'artists');
   if (f.titleContains)  p.set('title',          f.titleContains);
   if (f.artistContains) p.set('artist',         f.artistContains);
   if (f.genre)          p.set('genre',          f.genre);
@@ -177,12 +178,13 @@ export default function SearchPage() {
   const searchParams = useSearchParams();
 
   // ── Core search state ──────────────────────────────────────────────────────
-  const [query,     setQuery]     = useState(searchParams.get('q') ?? '');
-  const [filters,   setFilters]   = useState<Filters>(() => filtersFromParams(searchParams));
-  const [tolerance, setTolerance] = useState(0);
-  const [results,   setResults]   = useState<SearchResult | null>(null);
-  const [loading,   setLoading]   = useState(false);
-  const [error,     setError]     = useState<string | null>(null);
+  const [query,       setQuery]       = useState(searchParams.get('q') ?? '');
+  const [filters,     setFilters]     = useState<Filters>(() => filtersFromParams(searchParams));
+  const [tolerance,   setTolerance]   = useState(0);
+  const [artistsMode, setArtistsMode] = useState(() => searchParams.get('mode') === 'artists');
+  const [results,     setResults]     = useState<SearchResult | null>(null);
+  const [loading,     setLoading]     = useState(false);
+  const [error,       setError]       = useState<string | null>(null);
 
   // ── Pagination + sort state ────────────────────────────────────────────────
   const [page, setPage] = useState(() =>
@@ -226,7 +228,7 @@ export default function SearchPage() {
   // ── Core fetch ─────────────────────────────────────────────────────────────
   const doSearch = useCallback(async (
     q: string, tol: number, f: Filters,
-    pg = 1, pp = 50, s = 'relevance',
+    pg = 1, pp = 50, s = 'relevance', am = false,
   ) => {
     const hasF = activeCount(f) > 0;
     if (!q.trim() && !hasF) { setResults(null); setError(null); return; }
@@ -259,6 +261,7 @@ export default function SearchPage() {
       if (f.language)         params.set('language',       f.language);
       if (f.bpmMin)           params.set('bpm_min',        f.bpmMin);
       if (f.bpmMax)           params.set('bpm_max',        f.bpmMax);
+      if (am)                 params.set('mode',           'artists');
       params.set('page',     String(pg));
       params.set('per_page', String(pp));
       if (s !== 'relevance') params.set('sort', s);
@@ -282,9 +285,9 @@ export default function SearchPage() {
     if (!q && activeCount(filters) === 0) return;
     setTolerance(0);
     setPage(1);
-    doSearch(q, 0, filters, 1, perPage, sort);
-    router.replace(buildUrl(q, filters, 1, perPage, sort), { scroll: false });
-  }, [query, filters, perPage, sort, doSearch, router]);
+    doSearch(q, 0, filters, 1, perPage, sort, artistsMode);
+    router.replace(buildUrl(q, filters, 1, perPage, sort, artistsMode), { scroll: false });
+  }, [query, filters, perPage, sort, artistsMode, doSearch, router]);
 
   // ── Example chip ──────────────────────────────────────────────────────────
   const handleExampleClick = useCallback((label: string) => {
@@ -318,24 +321,24 @@ export default function SearchPage() {
   // ── Pagination + sort handlers ─────────────────────────────────────────────
   const handlePageChange = useCallback((pg: number) => {
     setPage(pg);
-    doSearch(query, tolerance, filters, pg, perPage, sort);
+    doSearch(query, tolerance, filters, pg, perPage, sort, artistsMode);
     scrollToTopRef.current = true;
-    router.replace(buildUrl(query, filters, pg, perPage, sort), { scroll: false });
-  }, [query, tolerance, filters, perPage, sort, doSearch, router]);
+    router.replace(buildUrl(query, filters, pg, perPage, sort, artistsMode), { scroll: false });
+  }, [query, tolerance, filters, perPage, sort, artistsMode, doSearch, router]);
 
   const handlePerPageChange = useCallback((pp: number) => {
     setPerPage(pp);
     setPage(1);
-    doSearch(query, tolerance, filters, 1, pp, sort);
-    router.replace(buildUrl(query, filters, 1, pp, sort), { scroll: false });
-  }, [query, tolerance, filters, sort, doSearch, router]);
+    doSearch(query, tolerance, filters, 1, pp, sort, artistsMode);
+    router.replace(buildUrl(query, filters, 1, pp, sort, artistsMode), { scroll: false });
+  }, [query, tolerance, filters, sort, artistsMode, doSearch, router]);
 
   const handleSortChange = useCallback((s: string) => {
     setSort(s);
     setPage(1);
-    doSearch(query, tolerance, filters, 1, perPage, s);
-    router.replace(buildUrl(query, filters, 1, perPage, s), { scroll: false });
-  }, [query, tolerance, filters, perPage, doSearch, router]);
+    doSearch(query, tolerance, filters, 1, perPage, s, artistsMode);
+    router.replace(buildUrl(query, filters, 1, perPage, s, artistsMode), { scroll: false });
+  }, [query, tolerance, filters, perPage, artistsMode, doSearch, router]);
 
   // ── Advanced form compile + submit ─────────────────────────────────────────
   const compileAdvancedQuery = (): string => {
@@ -489,11 +492,32 @@ export default function SearchPage() {
             loading={loading}
           />
 
+          {/* Mode toggles */}
+          <div className="mt-2 flex items-center gap-4 pl-1">
+            {/* Artists only toggle */}
+            <label className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-blue-500 transition-colors cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={artistsMode}
+                onChange={e => {
+                  const am = e.target.checked;
+                  setArtistsMode(am);
+                  setPage(1);
+                  const q = query.trim();
+                  if (q || activeCount(filters) > 0) {
+                    doSearch(q, 0, filters, 1, perPage, sort, am);
+                    router.replace(buildUrl(q, filters, 1, perPage, sort, am), { scroll: false });
+                  }
+                }}
+                className="accent-blue-600"
+              />
+              Artists only
+            </label>
+
           {/* Advanced search toggle */}
-          <div className="mt-2">
             <button
               onClick={() => setAdvExpanded(e => !e)}
-              className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-blue-500 transition-colors pl-1 select-none"
+              className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-blue-500 transition-colors select-none"
             >
               <svg
                 className={`h-3 w-3 transition-transform duration-150 ${advExpanded ? 'rotate-180' : ''}`}
@@ -513,6 +537,7 @@ export default function SearchPage() {
                 </span>
               )}
             </button>
+          </div>
 
             {advExpanded && (
               <div className="mt-2 p-4 bg-gray-50 rounded-xl border border-gray-200 space-y-4">
@@ -870,7 +895,47 @@ export default function SearchPage() {
           </p>
         )}
 
-        {hasResults && !error && (
+        {hasResults && !error && results?.mode === 'artists' && (
+          <div className="mt-4">
+            {results.totalCapped && (
+              <p className="text-xs text-gray-400 mb-3">
+                Showing first 10,000 of many matching artists
+              </p>
+            )}
+            {!results.totalCapped && results.total > 0 && (
+              <p className="text-xs text-gray-400 mb-3">
+                {results.total.toLocaleString()} artist{results.total !== 1 ? 's' : ''}
+              </p>
+            )}
+            <div className="columns-2 sm:columns-3 gap-x-4">
+              {(results.artists ?? []).map(artist => (
+                <div key={artist} className="break-inside-avoid py-1.5 border-b border-gray-100 text-sm text-gray-800 truncate">
+                  {artist}
+                </div>
+              ))}
+            </div>
+            {/* Pagination */}
+            {(results.hasMore || results.page > 1) && (
+              <div className="flex items-center justify-center gap-2 mt-6">
+                {results.page > 1 && (
+                  <button onClick={() => handlePageChange(results.page - 1)}
+                    className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors">
+                    ← Prev
+                  </button>
+                )}
+                <span className="text-xs text-gray-400">Page {results.page}</span>
+                {results.hasMore && (
+                  <button onClick={() => handlePageChange(results.page + 1)}
+                    className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors">
+                    Next →
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {hasResults && !error && results?.mode !== 'artists' && (
           <SearchResults
             results={results}
             loading={loading}

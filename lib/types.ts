@@ -31,7 +31,9 @@ export interface Track {
 }
 
 export interface SearchResult {
-  tracks:       Track[];
+  tracks?:      Track[];
+  artists?:     string[];  // populated when mode=artists
+  mode?:        string;
   total:        number;
   totalCapped?: boolean;  // true if there are >10,000 matching results
   page:         number;
