@@ -784,7 +784,6 @@ export default function SearchPage() {
                 </div>
               </div>
             )}
-          </div>
         </div>
 
         {/* Active filter chips (shown collapsed too) */}
