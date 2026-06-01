@@ -440,37 +440,43 @@ export default {
     // ── Artists mode ──────────────────────────────────────────────────────────
     if (artistsMode) {
       try {
-        const fts = buildFilterClauses(filters, 't');
+        // In artists mode, keywords filter on artist name only (not title/album).
+        // This prevents "purple" returning artists who merely have a purple-titled song.
         const dir = buildFilterClauses(filters, '');
+        const artistKeyword = parsed.keywords?.trim() ?? '';
+        const hasArtistKeyword = !!artistKeyword;
+
+        // Build artist-name LIKE clause when keyword present
+        const artistLike = hasArtistKeyword
+          ? { sql: ` AND artist LIKE ?`, params: [`%${artistKeyword}%`] }
+          : { sql: '', params: [] };
 
         let dataStmt:  D1PreparedStatement;
         let countStmt: D1PreparedStatement;
 
-        if (hasKeywords && hasDuration) {
-          const dur = buildDurationClause('t', minDuration, maxDuration);
+        if (hasArtistKeyword && hasDuration) {
+          const dur = buildDurationClause('', minDuration, maxDuration);
           dataStmt = env.DB.prepare(`
-            SELECT DISTINCT t.artist FROM tracks_fts JOIN tracks t ON t.id = tracks_fts.rowid
-            WHERE tracks_fts MATCH ? AND ${dur.sql} AND t.artist IS NOT NULL${fts.sql}
-            ORDER BY t.artist ASC LIMIT ${perPage + 1} OFFSET ${offset}
-          `).bind(effectiveFts, ...dur.params, ...fts.params);
+            SELECT DISTINCT artist FROM tracks
+            WHERE ${dur.sql} AND artist IS NOT NULL${artistLike.sql}${dir.sql}
+            ORDER BY artist ASC LIMIT ${perPage + 1} OFFSET ${offset}
+          `).bind(...dur.params, ...artistLike.params, ...dir.params);
           countStmt = env.DB.prepare(`
             SELECT COUNT(*) as n FROM (
-              SELECT DISTINCT t.artist FROM tracks_fts JOIN tracks t ON t.id = tracks_fts.rowid
-              WHERE tracks_fts MATCH ? AND ${dur.sql} AND t.artist IS NOT NULL${fts.sql} LIMIT 10001
+              SELECT DISTINCT artist FROM tracks WHERE ${dur.sql} AND artist IS NOT NULL${artistLike.sql}${dir.sql} LIMIT 10001
             )
-          `).bind(effectiveFts, ...dur.params, ...fts.params);
-        } else if (hasKeywords) {
+          `).bind(...dur.params, ...artistLike.params, ...dir.params);
+        } else if (hasArtistKeyword) {
           dataStmt = env.DB.prepare(`
-            SELECT DISTINCT t.artist FROM tracks_fts JOIN tracks t ON t.id = tracks_fts.rowid
-            WHERE tracks_fts MATCH ? AND t.artist IS NOT NULL${fts.sql}
-            ORDER BY t.artist ASC LIMIT ${perPage + 1} OFFSET ${offset}
-          `).bind(effectiveFts, ...fts.params);
+            SELECT DISTINCT artist FROM tracks
+            WHERE artist IS NOT NULL${artistLike.sql}${dir.sql}
+            ORDER BY artist ASC LIMIT ${perPage + 1} OFFSET ${offset}
+          `).bind(...artistLike.params, ...dir.params);
           countStmt = env.DB.prepare(`
             SELECT COUNT(*) as n FROM (
-              SELECT DISTINCT t.artist FROM tracks_fts JOIN tracks t ON t.id = tracks_fts.rowid
-              WHERE tracks_fts MATCH ? AND t.artist IS NOT NULL${fts.sql} LIMIT 10001
+              SELECT DISTINCT artist FROM tracks WHERE artist IS NOT NULL${artistLike.sql}${dir.sql} LIMIT 10001
             )
-          `).bind(effectiveFts, ...fts.params);
+          `).bind(...artistLike.params, ...dir.params);
         } else if (hasDuration) {
           const dur = buildDurationClause('', minDuration, maxDuration);
           dataStmt = env.DB.prepare(`
