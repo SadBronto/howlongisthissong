@@ -896,24 +896,18 @@ export default function SearchPage() {
 
         {hasResults && !error && results?.mode === 'artists' && (
           <div className="mt-4">
-            {results.totalCapped && (
+            {results.total > 0 && (
               <p className="text-xs text-gray-400 mb-3">
-                Showing first 10,000 of many matching artists
+                {results.totalCapped ? `${results.total.toLocaleString()}+` : results.total.toLocaleString()} artist{results.total !== 1 ? 's' : ''}
               </p>
             )}
-            {!results.totalCapped && results.total > 0 && (
-              <p className="text-xs text-gray-400 mb-3">
-                {results.total.toLocaleString()} artist{results.total !== 1 ? 's' : ''}
-              </p>
-            )}
-            <div className="columns-2 sm:columns-3 gap-x-4">
+            <div className="divide-y divide-gray-100">
               {(results.artists ?? []).map(artist => (
-                <div key={artist} className="break-inside-avoid py-1.5 border-b border-gray-100 text-sm text-gray-800 truncate">
+                <div key={artist} className="py-2 text-sm text-gray-800">
                   {artist}
                 </div>
               ))}
             </div>
-            {/* Pagination */}
             {(results.hasMore || results.page > 1) && (
               <div className="flex items-center justify-center gap-2 mt-6">
                 {results.page > 1 && (
@@ -922,7 +916,9 @@ export default function SearchPage() {
                     ← Prev
                   </button>
                 )}
-                <span className="text-xs text-gray-400">Page {results.page}</span>
+                <span className="text-xs text-gray-400">
+                  Page {results.page} of {Math.min(500, Math.ceil(results.total / results.perPage))}
+                </span>
                 {results.hasMore && (
                   <button onClick={() => handlePageChange(results.page + 1)}
                     className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors">

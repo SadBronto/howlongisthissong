@@ -440,73 +440,70 @@ export default {
     // ── Artists mode ──────────────────────────────────────────────────────────
     if (artistsMode) {
       try {
-        // In artists mode, keywords filter on artist name only (not title/album).
-        // This prevents "purple" returning artists who merely have a purple-titled song.
+        const fts = buildFilterClauses(filters, 't');
         const dir = buildFilterClauses(filters, '');
         const artistKeyword = parsed.keywords?.trim() ?? '';
         const hasArtistKeyword = !!artistKeyword;
 
-        // Build artist-name LIKE clause when keyword present
-        const artistLike = hasArtistKeyword
-          ? { sql: ` AND artist LIKE ?`, params: [`%${artistKeyword}%`] }
-          : { sql: '', params: [] };
-
-        // Exclude collaboration/credit strings — user wants standalone band names only
-        const noCollabs =
-          ` AND artist NOT LIKE '%feat%'` +
-          ` AND artist NOT LIKE '% & %'` +
-          ` AND artist NOT LIKE '% of %'` +
-          ` AND artist NOT LIKE '%, %'` +
-          ` AND artist NOT LIKE '% with %'` +
-          ` AND artist NOT LIKE '% vs %'`;
+        // Exclude collaboration/credit strings — standalone band names only
+        const noC    = ` AND artist NOT LIKE '%feat%' AND artist NOT LIKE '% & %' AND artist NOT LIKE '% of %' AND artist NOT LIKE '%, %' AND artist NOT LIKE '% with %' AND artist NOT LIKE '% vs %'`;
+        const noCfts = ` AND t.artist NOT LIKE '%feat%' AND t.artist NOT LIKE '% & %' AND t.artist NOT LIKE '% of %' AND t.artist NOT LIKE '%, %' AND t.artist NOT LIKE '% with %' AND t.artist NOT LIKE '% vs %'`;
 
         let dataStmt:  D1PreparedStatement;
         let countStmt: D1PreparedStatement;
 
-        if (hasArtistKeyword && hasDuration) {
-          const dur = buildDurationClause('', minDuration, maxDuration);
+        if (hasArtistKeyword) {
+          // FTS column-specific search: only matches against the artist column,
+          // avoids full table scan. Ordered by peak track popularity.
+          const ftsArtistTerm = `artist:"${artistKeyword.replace(/"/g, '""')}"`;
+          const dur    = hasDuration ? buildDurationClause('t', minDuration, maxDuration) : null;
+          const durSql = dur ? ` AND ${dur.sql}` : '';
+
           dataStmt = env.DB.prepare(`
-            SELECT DISTINCT artist FROM tracks
-            WHERE ${dur.sql} AND artist IS NOT NULL${artistLike.sql}${noCollabs}${dir.sql}
-            ORDER BY artist ASC LIMIT ${perPage + 1} OFFSET ${offset}
-          `).bind(...dur.params, ...artistLike.params, ...dir.params);
+            SELECT t.artist, MAX(COALESCE(t.popularity, 0)) as max_pop
+            FROM tracks_fts JOIN tracks t ON t.id = tracks_fts.rowid
+            WHERE tracks_fts MATCH ?${durSql}
+            AND t.artist IS NOT NULL${noCfts}${fts.sql}
+            GROUP BY t.artist
+            ORDER BY max_pop DESC, t.artist ASC
+            LIMIT ${perPage + 1} OFFSET ${offset}
+          `).bind(ftsArtistTerm, ...(dur?.params ?? []), ...fts.params);
+
           countStmt = env.DB.prepare(`
             SELECT COUNT(*) as n FROM (
-              SELECT DISTINCT artist FROM tracks WHERE ${dur.sql} AND artist IS NOT NULL${artistLike.sql}${noCollabs}${dir.sql} LIMIT 10001
+              SELECT t.artist FROM tracks_fts JOIN tracks t ON t.id = tracks_fts.rowid
+              WHERE tracks_fts MATCH ?${durSql}
+              AND t.artist IS NOT NULL${noCfts}${fts.sql}
+              GROUP BY t.artist LIMIT 10001
             )
-          `).bind(...dur.params, ...artistLike.params, ...dir.params);
-        } else if (hasArtistKeyword) {
-          dataStmt = env.DB.prepare(`
-            SELECT DISTINCT artist FROM tracks
-            WHERE artist IS NOT NULL${artistLike.sql}${noCollabs}${dir.sql}
-            ORDER BY artist ASC LIMIT ${perPage + 1} OFFSET ${offset}
-          `).bind(...artistLike.params, ...dir.params);
-          countStmt = env.DB.prepare(`
-            SELECT COUNT(*) as n FROM (
-              SELECT DISTINCT artist FROM tracks WHERE artist IS NOT NULL${artistLike.sql}${noCollabs}${dir.sql} LIMIT 10001
-            )
-          `).bind(...artistLike.params, ...dir.params);
+          `).bind(ftsArtistTerm, ...(dur?.params ?? []), ...fts.params);
+
         } else if (hasDuration) {
           const dur = buildDurationClause('', minDuration, maxDuration);
           dataStmt = env.DB.prepare(`
-            SELECT DISTINCT artist FROM tracks
-            WHERE ${dur.sql} AND artist IS NOT NULL${noCollabs}${dir.sql}
-            ORDER BY artist ASC LIMIT ${perPage + 1} OFFSET ${offset}
+            SELECT artist, MAX(COALESCE(popularity, 0)) as max_pop FROM tracks
+            WHERE ${dur.sql} AND artist IS NOT NULL${noC}${dir.sql}
+            GROUP BY artist ORDER BY max_pop DESC, artist ASC
+            LIMIT ${perPage + 1} OFFSET ${offset}
           `).bind(...dur.params, ...dir.params);
           countStmt = env.DB.prepare(`
             SELECT COUNT(*) as n FROM (
-              SELECT DISTINCT artist FROM tracks WHERE ${dur.sql} AND artist IS NOT NULL${noCollabs}${dir.sql} LIMIT 10001
+              SELECT artist FROM tracks WHERE ${dur.sql} AND artist IS NOT NULL${noC}${dir.sql}
+              GROUP BY artist LIMIT 10001
             )
           `).bind(...dur.params, ...dir.params);
+
         } else {
           dataStmt = env.DB.prepare(`
-            SELECT DISTINCT artist FROM tracks
-            WHERE artist IS NOT NULL${noCollabs}${dir.sql}
-            ORDER BY artist ASC LIMIT ${perPage + 1} OFFSET ${offset}
+            SELECT artist, MAX(COALESCE(popularity, 0)) as max_pop FROM tracks
+            WHERE artist IS NOT NULL${noC}${dir.sql}
+            GROUP BY artist ORDER BY max_pop DESC, artist ASC
+            LIMIT ${perPage + 1} OFFSET ${offset}
           `).bind(...dir.params);
           countStmt = env.DB.prepare(`
             SELECT COUNT(*) as n FROM (
-              SELECT DISTINCT artist FROM tracks WHERE artist IS NOT NULL${noCollabs}${dir.sql} LIMIT 10001
+              SELECT artist FROM tracks WHERE artist IS NOT NULL${noC}${dir.sql}
+              GROUP BY artist LIMIT 10001
             )
           `).bind(...dir.params);
         }
@@ -516,12 +513,12 @@ export default {
           countStmt.first<{ n: number }>(),
         ]);
 
-        const allRows    = (result.results ?? []) as { artist: string }[];
-        const hasMore    = allRows.length > perPage;
-        const artists    = allRows.slice(0, perPage).map(r => r.artist).filter(Boolean);
-        const rawCount   = countResult?.n ?? (hasMore ? perPage + 1 : artists.length);
+        const allRows     = (result.results ?? []) as { artist: string }[];
+        const hasMore     = allRows.length > perPage;
+        const artists     = allRows.slice(0, perPage).map(r => r.artist).filter(Boolean);
+        const rawCount    = countResult?.n ?? (hasMore ? perPage + 1 : artists.length);
         const totalCapped = rawCount > 10000;
-        const total      = Math.min(rawCount, 10000);
+        const total       = Math.min(rawCount, 10000);
 
         return json({ artists, total, totalCapped, page, perPage, hasMore, mode: 'artists' });
       } catch (err) {
