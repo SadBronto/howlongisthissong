@@ -447,21 +447,21 @@ export default {
 
         // Exclude collaboration/credit strings — standalone band names only
         const collabPatterns = [
-          `NOT LIKE '%feat%'`,     // feat. / featuring
-          `NOT LIKE '%&%'`,        // & (with or without spaces)
-          `NOT LIKE '% and %'`,    // "and" separator
-          `NOT LIKE '% und %'`,    // German "and"
-          `NOT LIKE '% of %'`,     // "Glenn Hughes of Deep Purple"
-          `NOT LIKE '%, %'`,       // comma-separated credits
-          `NOT LIKE '% with %'`,   // "with" separator
-          `NOT LIKE '% vs %'`,     // "vs" separator
-          `NOT LIKE '% ft. %'`,    // alternate feat.
-          `NOT LIKE '% ft %'`,     // alternate feat. (no period)
-          `NOT LIKE '% x %'`,      // "x" collab separator
-          `NOT LIKE '% / %'`,      // slash separator
+          `NOT LIKE '%feat%'`,        // feat. / featuring
+          `NOT LIKE '%&%'`,           // & (with or without spaces)
+          `NOT LIKE '% of %'`,        // "Glenn Hughes of Deep Purple"
+          `NOT LIKE '%, %'`,          // comma-separated credits
+          `NOT LIKE '% with %'`,      // "with" separator
+          `NOT LIKE '% vs %'`,        // "vs" separator
+          `NOT LIKE '% ft. %'`,       // alternate feat.
+          `NOT LIKE '% ft %'`,        // alternate feat. (no period)
+          `NOT LIKE '% x %'`,         // "x" collab separator
+          `NOT LIKE '% / %'`,         // slash separator
           `NOT LIKE '% presents %'`,  // "Artist presents Other"
           `NOT LIKE '% pres. %'`,     // abbreviated presents
           `NOT LIKE '%;%'`,           // semicolon separator
+          // NOTE: "and" / "und" intentionally excluded — too many real band names
+          // contain "and" (Of Monsters and Men, Simon and Garfunkel, etc.)
         ];
         const noC    = collabPatterns.map(p => ` AND artist ${p}`).join('');
         const noCfts = collabPatterns.map(p => ` AND t.artist ${p}`).join('');
