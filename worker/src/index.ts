@@ -446,8 +446,33 @@ export default {
         const hasArtistKeyword = !!artistKeyword;
 
         // Exclude collaboration/credit strings — standalone band names only
-        const noC    = ` AND artist NOT LIKE '%feat%' AND artist NOT LIKE '% & %' AND artist NOT LIKE '% of %' AND artist NOT LIKE '%, %' AND artist NOT LIKE '% with %' AND artist NOT LIKE '% vs %'`;
-        const noCfts = ` AND t.artist NOT LIKE '%feat%' AND t.artist NOT LIKE '% & %' AND t.artist NOT LIKE '% of %' AND t.artist NOT LIKE '%, %' AND t.artist NOT LIKE '% with %' AND t.artist NOT LIKE '% vs %'`;
+        const collabPatterns = [
+          `NOT LIKE '%feat%'`,     // feat. / featuring
+          `NOT LIKE '%&%'`,        // & (with or without spaces)
+          `NOT LIKE '% and %'`,    // "and" separator
+          `NOT LIKE '% und %'`,    // German "and"
+          `NOT LIKE '% of %'`,     // "Glenn Hughes of Deep Purple"
+          `NOT LIKE '%, %'`,       // comma-separated credits
+          `NOT LIKE '% with %'`,   // "with" separator
+          `NOT LIKE '% vs %'`,     // "vs" separator
+          `NOT LIKE '% ft. %'`,    // alternate feat.
+          `NOT LIKE '% ft %'`,     // alternate feat. (no period)
+          `NOT LIKE '% x %'`,      // "x" collab separator
+          `NOT LIKE '% / %'`,      // slash separator
+          `NOT LIKE '% presents %'`,  // "Artist presents Other"
+          `NOT LIKE '% pres. %'`,     // abbreviated presents
+          `NOT LIKE '%;%'`,           // semicolon separator
+        ];
+        const noC    = collabPatterns.map(p => ` AND artist ${p}`).join('');
+        const noCfts = collabPatterns.map(p => ` AND t.artist ${p}`).join('');
+
+        // Sort order for artists mode
+        const artistOb     = sort === 'asc' ? 'ORDER BY artist ASC'
+          : sort === 'desc' ? 'ORDER BY artist DESC'
+          : 'ORDER BY max_pop DESC, artist ASC';
+        const artistObFts  = sort === 'asc' ? 'ORDER BY t.artist ASC'
+          : sort === 'desc' ? 'ORDER BY t.artist DESC'
+          : 'ORDER BY max_pop DESC, t.artist ASC';
 
         let dataStmt:  D1PreparedStatement;
         let countStmt: D1PreparedStatement;
@@ -465,7 +490,7 @@ export default {
             WHERE tracks_fts MATCH ?${durSql}
             AND t.artist IS NOT NULL${noCfts}${fts.sql}
             GROUP BY t.artist
-            ORDER BY max_pop DESC, t.artist ASC
+            ${artistObFts}
             LIMIT ${perPage + 1} OFFSET ${offset}
           `).bind(ftsArtistTerm, ...(dur?.params ?? []), ...fts.params);
 
@@ -483,7 +508,7 @@ export default {
           dataStmt = env.DB.prepare(`
             SELECT artist, MAX(COALESCE(popularity, 0)) as max_pop FROM tracks
             WHERE ${dur.sql} AND artist IS NOT NULL${noC}${dir.sql}
-            GROUP BY artist ORDER BY max_pop DESC, artist ASC
+            GROUP BY artist ${artistOb}
             LIMIT ${perPage + 1} OFFSET ${offset}
           `).bind(...dur.params, ...dir.params);
           countStmt = env.DB.prepare(`
@@ -497,7 +522,7 @@ export default {
           dataStmt = env.DB.prepare(`
             SELECT artist, MAX(COALESCE(popularity, 0)) as max_pop FROM tracks
             WHERE artist IS NOT NULL${noC}${dir.sql}
-            GROUP BY artist ORDER BY max_pop DESC, artist ASC
+            GROUP BY artist ${artistOb}
             LIMIT ${perPage + 1} OFFSET ${offset}
           `).bind(...dir.params);
           countStmt = env.DB.prepare(`

@@ -896,11 +896,29 @@ export default function SearchPage() {
 
         {hasResults && !error && results?.mode === 'artists' && (
           <div className="mt-4">
-            {results.total > 0 && (
-              <p className="text-xs text-gray-400 mb-3">
-                {results.totalCapped ? `${results.total.toLocaleString()}+` : results.total.toLocaleString()} artist{results.total !== 1 ? 's' : ''}
-              </p>
-            )}
+            <div className="flex items-center justify-between mb-3">
+              {results.total > 0 && (
+                <p className="text-xs text-gray-400">
+                  {results.totalCapped ? `${results.total.toLocaleString()}+` : results.total.toLocaleString()} artist{results.total !== 1 ? 's' : ''}
+                </p>
+              )}
+              <div className="flex items-center gap-1 ml-auto">
+                {[
+                  { value: 'relevance', label: 'Popularity' },
+                  { value: 'asc',       label: 'A→Z' },
+                  { value: 'desc',      label: 'Z→A' },
+                ].map(opt => (
+                  <button key={opt.value} onClick={() => handleSortChange(opt.value)}
+                    className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${
+                      sort === opt.value
+                        ? 'bg-blue-600 text-white border-blue-600'
+                        : 'bg-white text-gray-500 border-gray-200 hover:border-blue-300 hover:text-blue-600'
+                    }`}>
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
             <div className="divide-y divide-gray-100">
               {(results.artists ?? []).map(artist => (
                 <div key={artist} className="py-2 text-sm text-gray-800">
