@@ -451,6 +451,15 @@ export default {
           ? { sql: ` AND artist LIKE ?`, params: [`%${artistKeyword}%`] }
           : { sql: '', params: [] };
 
+        // Exclude collaboration/credit strings — user wants standalone band names only
+        const noCollabs =
+          ` AND artist NOT LIKE '%feat%'` +
+          ` AND artist NOT LIKE '% & %'` +
+          ` AND artist NOT LIKE '% of %'` +
+          ` AND artist NOT LIKE '%, %'` +
+          ` AND artist NOT LIKE '% with %'` +
+          ` AND artist NOT LIKE '% vs %'`;
+
         let dataStmt:  D1PreparedStatement;
         let countStmt: D1PreparedStatement;
 
@@ -458,46 +467,46 @@ export default {
           const dur = buildDurationClause('', minDuration, maxDuration);
           dataStmt = env.DB.prepare(`
             SELECT DISTINCT artist FROM tracks
-            WHERE ${dur.sql} AND artist IS NOT NULL${artistLike.sql}${dir.sql}
+            WHERE ${dur.sql} AND artist IS NOT NULL${artistLike.sql}${noCollabs}${dir.sql}
             ORDER BY artist ASC LIMIT ${perPage + 1} OFFSET ${offset}
           `).bind(...dur.params, ...artistLike.params, ...dir.params);
           countStmt = env.DB.prepare(`
             SELECT COUNT(*) as n FROM (
-              SELECT DISTINCT artist FROM tracks WHERE ${dur.sql} AND artist IS NOT NULL${artistLike.sql}${dir.sql} LIMIT 10001
+              SELECT DISTINCT artist FROM tracks WHERE ${dur.sql} AND artist IS NOT NULL${artistLike.sql}${noCollabs}${dir.sql} LIMIT 10001
             )
           `).bind(...dur.params, ...artistLike.params, ...dir.params);
         } else if (hasArtistKeyword) {
           dataStmt = env.DB.prepare(`
             SELECT DISTINCT artist FROM tracks
-            WHERE artist IS NOT NULL${artistLike.sql}${dir.sql}
+            WHERE artist IS NOT NULL${artistLike.sql}${noCollabs}${dir.sql}
             ORDER BY artist ASC LIMIT ${perPage + 1} OFFSET ${offset}
           `).bind(...artistLike.params, ...dir.params);
           countStmt = env.DB.prepare(`
             SELECT COUNT(*) as n FROM (
-              SELECT DISTINCT artist FROM tracks WHERE artist IS NOT NULL${artistLike.sql}${dir.sql} LIMIT 10001
+              SELECT DISTINCT artist FROM tracks WHERE artist IS NOT NULL${artistLike.sql}${noCollabs}${dir.sql} LIMIT 10001
             )
           `).bind(...artistLike.params, ...dir.params);
         } else if (hasDuration) {
           const dur = buildDurationClause('', minDuration, maxDuration);
           dataStmt = env.DB.prepare(`
             SELECT DISTINCT artist FROM tracks
-            WHERE ${dur.sql} AND artist IS NOT NULL${dir.sql}
+            WHERE ${dur.sql} AND artist IS NOT NULL${noCollabs}${dir.sql}
             ORDER BY artist ASC LIMIT ${perPage + 1} OFFSET ${offset}
           `).bind(...dur.params, ...dir.params);
           countStmt = env.DB.prepare(`
             SELECT COUNT(*) as n FROM (
-              SELECT DISTINCT artist FROM tracks WHERE ${dur.sql} AND artist IS NOT NULL${dir.sql} LIMIT 10001
+              SELECT DISTINCT artist FROM tracks WHERE ${dur.sql} AND artist IS NOT NULL${noCollabs}${dir.sql} LIMIT 10001
             )
           `).bind(...dur.params, ...dir.params);
         } else {
           dataStmt = env.DB.prepare(`
             SELECT DISTINCT artist FROM tracks
-            WHERE artist IS NOT NULL${dir.sql}
+            WHERE artist IS NOT NULL${noCollabs}${dir.sql}
             ORDER BY artist ASC LIMIT ${perPage + 1} OFFSET ${offset}
           `).bind(...dir.params);
           countStmt = env.DB.prepare(`
             SELECT COUNT(*) as n FROM (
-              SELECT DISTINCT artist FROM tracks WHERE artist IS NOT NULL${dir.sql} LIMIT 10001
+              SELECT DISTINCT artist FROM tracks WHERE artist IS NOT NULL${noCollabs}${dir.sql} LIMIT 10001
             )
           `).bind(...dir.params);
         }
