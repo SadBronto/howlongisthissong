@@ -46,7 +46,7 @@ export default function SearchResults({
 
   if (!results) return null;
 
-  const { tracks, total, totalCapped, hasMore, parsed } = results;
+  const { tracks = [], total, totalCapped, hasMore, parsed } = results;
   const sliderIndex = TOLERANCE_STEPS.indexOf(tolerance);
 
   const totalPages = Math.min(500, Math.ceil(total / perPage));
