@@ -158,6 +158,43 @@ function activeCount(f: Filters): number {
   ].filter(Boolean).length;
 }
 
+/** Short labels for the collapsed advanced-search summary line. */
+function summaryFromFilters(f: Filters, exact: string, from: string, to: string): string[] {
+  const s: string[] = [];
+  if (f.titleContains)  s.push('Title');
+  if (f.artistContains) s.push('Artist');
+  if (exact.trim() || from.trim() || to.trim()) s.push('Duration');
+  if (f.genre)          s.push('Genre');
+  if (f.yearFrom || f.yearTo) s.push('Year');
+  if (f.releaseType)    s.push('Type');
+  if (f.label)          s.push('Label');
+  if (f.artistType)     s.push('Artist type');
+  if (f.artistGender)   s.push('Gender');
+  if (f.artistCountry)  s.push('Country');
+  if (f.language)       s.push('Language');
+  if (f.bpmMin || f.bpmMax) s.push('BPM');
+  return s;
+}
+
+/** A removable active-filter chip. */
+function FilterChip({ label, onRemove }: { label: string; onRemove: () => void }) {
+  return (
+    <span className="inline-flex items-center gap-1 text-xs bg-blue-50 text-blue-700 border border-blue-200 pl-2 pr-1 py-0.5 rounded-full">
+      {label}
+      <button
+        onClick={onRemove}
+        aria-label={`Remove ${label} filter`}
+        title="Remove this filter"
+        className="flex items-center justify-center w-4 h-4 rounded-full text-blue-400 hover:text-white hover:bg-red-500 transition-colors leading-none"
+      >
+        <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+        </svg>
+      </button>
+    </span>
+  );
+}
+
 // ── Duration normalizer ───────────────────────────────────────────────────────
 /** "2" → "2:00", "10" → "10:00"; leaves "3:16", "3:16.423", "" unchanged. */
 function normalizeDuration(s: string): string {
@@ -388,27 +425,35 @@ export default function SearchPage() {
 
     // Collapse panel and build field summary
     setAdvExpanded(false);
-    const summary: string[] = [];
-    if (advTitle.trim())  summary.push('Title');
-    if (advArtist.trim()) summary.push('Artist');
-    if (advDurMode === 'exact' ? advExact.trim() : (advFrom.trim() || advTo.trim()))
-      summary.push('Duration');
-    if (advGenre)    summary.push('Genre');
-    if (advYearFrom || advYearTo) summary.push('Year');
-    if (advRelType)  summary.push('Type');
-    if (advLabel)    summary.push('Label');
-    if (advArtistType)    summary.push('Artist type');
-    if (advArtistGender)  summary.push('Gender');
-    if (advArtistCountry) summary.push('Country');
-    if (advLanguage)      summary.push('Language');
-    if (advBpmMin || advBpmMax) summary.push('BPM');
-    setAdvSummary(summary);
+    const durActive = advDurMode === 'exact' ? advExact : `${advFrom}${advTo}`;
+    setAdvSummary(summaryFromFilters(newFilters, durActive, '', ''));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [advTitle, advArtist, advDurMode, advExact, advFrom, advTo,
       advGenre, advYearFrom, advYearTo, advRelType, advLabel,
       advArtistType, advArtistGender, advArtistCountry, advLanguage,
       advBpmMin, advBpmMax,
       perPage, sort, doSearch, router]);
+
+  // ── Remove a single filter (or a paired range) and re-run the search ────────
+  const removeFilter = useCallback((keys: (keyof Filters)[]) => {
+    const next: Filters = { ...filters };
+    for (const k of keys) next[k] = '';
+    setFilters(next);
+    setResults(null);
+    setPage(1);
+    const q = query.trim();
+    if (q || activeCount(next) > 0) {
+      // keep the collapsed summary line in sync (duration lives in the query, untouched here)
+      const p = parseQuery(q);
+      const durMarker = (p.exactDuration != null || p.minDuration != null || p.maxDuration != null) ? 'x' : '';
+      setAdvSummary(summaryFromFilters(next, durMarker, '', ''));
+      doSearch(q, 0, next, 1, perPage, sort, artistsMode);
+      router.replace(buildUrl(q, next, 1, perPage, sort, artistsMode), { scroll: false });
+    } else {
+      setAdvSummary([]);
+      router.replace('/', { scroll: false });
+    }
+  }, [filters, query, perPage, sort, artistsMode, doSearch, router]);
 
   // Sync advanced filter fields from main filter state when advanced opens
   useEffect(() => {
@@ -793,65 +838,49 @@ export default function SearchPage() {
 
         {/* Active filter chips (shown collapsed too) */}
         {numActive > 0 && !advExpanded && (
-          <div className="flex flex-wrap gap-1.5 mt-2 px-4 max-w-2xl w-full">
+          <div className="flex flex-wrap items-center gap-1.5 mt-2 px-4 max-w-2xl w-full">
             {filters.titleContains && (
-              <span className="text-xs bg-blue-50 text-blue-700 border border-blue-200 px-2 py-0.5 rounded-full">
-                title: {filters.titleContains}
-              </span>
+              <FilterChip label={`title: ${filters.titleContains}`} onRemove={() => removeFilter(['titleContains'])} />
             )}
             {filters.artistContains && (
-              <span className="text-xs bg-blue-50 text-blue-700 border border-blue-200 px-2 py-0.5 rounded-full">
-                artist: {filters.artistContains}
-              </span>
+              <FilterChip label={`artist: ${filters.artistContains}`} onRemove={() => removeFilter(['artistContains'])} />
             )}
             {filters.genre && (
-              <span className="text-xs bg-blue-50 text-blue-700 border border-blue-200 px-2 py-0.5 rounded-full">
-                genre: {filters.genre}
-              </span>
+              <FilterChip label={`genre: ${filters.genre}`} onRemove={() => removeFilter(['genre'])} />
             )}
             {(filters.yearFrom || filters.yearTo) && (
-              <span className="text-xs bg-blue-50 text-blue-700 border border-blue-200 px-2 py-0.5 rounded-full">
-                {filters.yearFrom && filters.yearTo
+              <FilterChip
+                label={filters.yearFrom && filters.yearTo
                   ? `${filters.yearFrom}–${filters.yearTo}`
                   : filters.yearFrom ? `from ${filters.yearFrom}` : `to ${filters.yearTo}`}
-              </span>
+                onRemove={() => removeFilter(['yearFrom', 'yearTo'])}
+              />
             )}
             {filters.releaseType && (
-              <span className="text-xs bg-blue-50 text-blue-700 border border-blue-200 px-2 py-0.5 rounded-full">
-                {filters.releaseType}
-              </span>
+              <FilterChip label={filters.releaseType} onRemove={() => removeFilter(['releaseType'])} />
             )}
             {filters.label && (
-              <span className="text-xs bg-blue-50 text-blue-700 border border-blue-200 px-2 py-0.5 rounded-full">
-                label: {filters.label}
-              </span>
+              <FilterChip label={`label: ${filters.label}`} onRemove={() => removeFilter(['label'])} />
             )}
             {filters.artistType && (
-              <span className="text-xs bg-blue-50 text-blue-700 border border-blue-200 px-2 py-0.5 rounded-full">
-                type: {filters.artistType}
-              </span>
+              <FilterChip label={`type: ${filters.artistType}`} onRemove={() => removeFilter(['artistType'])} />
             )}
             {filters.artistGender && (
-              <span className="text-xs bg-blue-50 text-blue-700 border border-blue-200 px-2 py-0.5 rounded-full">
-                gender: {filters.artistGender}
-              </span>
+              <FilterChip label={`gender: ${filters.artistGender}`} onRemove={() => removeFilter(['artistGender'])} />
             )}
             {filters.artistCountry && (
-              <span className="text-xs bg-blue-50 text-blue-700 border border-blue-200 px-2 py-0.5 rounded-full">
-                country: {filters.artistCountry}
-              </span>
+              <FilterChip label={`country: ${filters.artistCountry}`} onRemove={() => removeFilter(['artistCountry'])} />
             )}
             {filters.language && (
-              <span className="text-xs bg-blue-50 text-blue-700 border border-blue-200 px-2 py-0.5 rounded-full">
-                lang: {filters.language}
-              </span>
+              <FilterChip label={`lang: ${filters.language}`} onRemove={() => removeFilter(['language'])} />
             )}
             {(filters.bpmMin || filters.bpmMax) && (
-              <span className="text-xs bg-blue-50 text-blue-700 border border-blue-200 px-2 py-0.5 rounded-full">
-                {filters.bpmMin && filters.bpmMax
+              <FilterChip
+                label={filters.bpmMin && filters.bpmMax
                   ? `${filters.bpmMin}–${filters.bpmMax} BPM`
                   : filters.bpmMin ? `≥${filters.bpmMin} BPM` : `≤${filters.bpmMax} BPM`}
-              </span>
+                onRemove={() => removeFilter(['bpmMin', 'bpmMax'])}
+              />
             )}
             <button
               onClick={() => {

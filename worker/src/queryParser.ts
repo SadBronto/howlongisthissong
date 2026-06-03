@@ -2,7 +2,7 @@
 
 export interface ParsedQuery {
   keywords?: string;
-  titleArtistPattern?: string;    // SQL LIKE pattern from wildcard token (con* → 'con%')
+  wildcardToken?: string;         // raw wildcard token (con*, *con, *con*) — worker builds the LIKE pattern
   exactDuration?: number;         // ms — floor of the typed time
   exactDurationWindowMs?: number; // 1000 for M:SS | 100 for M:SS.M | 10 | 1
   minDuration?: number;           // ms — range / open-ended lower bound
@@ -90,20 +90,15 @@ export function parseQuery(input: string): ParsedQuery {
     }
   }
 
-  // Extract wildcard tokens: con* → starts-with, *con → ends-with, *con* → contains
-  // Only the first wildcard word is used; the rest become normal FTS keywords.
+  // Extract the first wildcard token (con*, *con, *con*); the worker converts it
+  // to a SQL LIKE pattern. Remaining words stay as normal FTS keywords.
   const words = q.split(/\s+/).filter(Boolean);
   const wcIdx = words.findIndex(w => w.includes('*'));
   if (wcIdx !== -1) {
     const wc   = words[wcIdx];
-    const core = wc.replace(/^\*+/, '').replace(/\*+$/, '');
+    const core = wc.replace(/\*/g, '');   // letters only, for the empty-token guard
     if (core) {
-      const leading  = wc.startsWith('*');
-      const trailing = wc.endsWith('*');
-      result.titleArtistPattern =
-        (leading && trailing) ? `%${core}%` :
-        leading               ? `%${core}`  :
-        trailing              ? `${core}%`  : `%${core}%`;
+      result.wildcardToken = wc;
       words.splice(wcIdx, 1);
       q = words.join(' ');
     }

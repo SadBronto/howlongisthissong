@@ -101,20 +101,22 @@ interface Filters {
 }
 
 /** Convert a user-typed value with optional * wildcards into a SQL LIKE pattern.
- *  con*  → 'con%'   (starts with)
- *  *con  → '%con'   (ends with)
- *  *con* → '%con%'  (contains)
- *  con   → '%con%'  (default contains, no wildcards)
+ *  Each '*' means "at least one character on that side" (not zero):
+ *    con*  → 'con%_'    starts with con, ≥1 char after  (matches "cons", not "con")
+ *    *con  → '_%con'    ends with con,   ≥1 char before (matches "bacon", not "con")
+ *    *con* → '_%con%_'  contains con,    ≥1 char before AND after
+ *                       (matches "Terror" for *erro*, not "Herro")
+ *    con   → '%con%'    no wildcards typed → plain "contains" (advanced-field default)
  */
 function likePattern(value: string): string {
   const leading  = value.startsWith('*');
   const trailing = value.endsWith('*');
   const core     = value.replace(/^\*+/, '').replace(/\*+$/, '');
   if (!core) return '%';
-  if (leading && trailing) return `%${core}%`;
-  if (leading)             return `%${core}`;
-  if (trailing)            return `${core}%`;
-  return `%${core}%`;
+  if (!leading && !trailing) return `%${core}%`;
+  const left  = leading  ? '_%' : '';
+  const right = trailing ? '%_' : '';
+  return `${left}${core}${right}`;
 }
 
 function buildFilterClauses(f: Filters, alias: string): { sql: string; params: unknown[] } {
@@ -433,8 +435,8 @@ export default {
     const effectiveFts = parsed.keywords ? sanitizeForFts(parsed.keywords) : '';
     const hasKeywords  = !!effectiveFts;
 
-    // Wildcard pattern from main search box (e.g. con* → title/artist LIKE 'con%')
-    const wcPat    = parsed.titleArtistPattern ?? null;
+    // Wildcard pattern from main search box (e.g. con* → title/artist LIKE 'con%_')
+    const wcPat    = parsed.wildcardToken ? likePattern(parsed.wildcardToken) : null;
     const hasWc    = !!wcPat;
     const wcFts    = hasWc ? { sql: ` AND (t.title LIKE ? OR t.artist LIKE ?)`,   params: [wcPat, wcPat] as unknown[] } : { sql: '', params: [] as unknown[] };
     const wcDir    = hasWc ? { sql: ` AND (title LIKE ? OR artist LIKE ?)`,        params: [wcPat, wcPat] as unknown[] } : { sql: '', params: [] as unknown[] };
