@@ -284,6 +284,7 @@ export default function SearchPage() {
   const handleSubmit = useCallback(() => {
     const q = query.trim();
     if (!q && activeCount(filters) === 0) return;
+    setResults(null);
     setTolerance(0);
     setPage(1);
     doSearch(q, 0, filters, 1, perPage, sort, artistsMode);
@@ -294,6 +295,7 @@ export default function SearchPage() {
   const handleExampleClick = useCallback((label: string) => {
     setQuery(label);
     setFilters(EMPTY_FILTERS);
+    setResults(null);
     setTolerance(0);
     setPage(1);
     doSearch(label, 0, EMPTY_FILTERS, 1, perPage, sort);
@@ -376,6 +378,7 @@ export default function SearchPage() {
       bpmMax:         advBpmMax.trim(),
     };
     if (!compiled && activeCount(newFilters) === 0) return;
+    setResults(null);
     setQuery(compiled);
     setFilters(newFilters);
     setTolerance(0);
@@ -503,6 +506,7 @@ export default function SearchPage() {
                 onChange={e => {
                   const am = e.target.checked;
                   setArtistsMode(am);
+                  setResults(null);
                   setPage(1);
                   const q = query.trim();
                   if (q || activeCount(filters) > 0) {
@@ -853,6 +857,7 @@ export default function SearchPage() {
               onClick={() => {
                 setFilters(EMPTY_FILTERS);
                 setAdvSummary([]);
+                setResults(null);
                 setPage(1);
                 if (query.trim()) doSearch(query, 0, EMPTY_FILTERS, 1, perPage, sort);
                 else handleClear();
