@@ -7,15 +7,27 @@ import SearchResults from './SearchResults';
 import { parseQuery } from '@/lib/queryParser';
 import type { SearchResult } from '@/lib/types';
 
-const EXAMPLES = [
+interface Example {
+  label:    string;            // chip text
+  hint:     string;            // tooltip
+  query?:   string;            // typed into the main box (defaults to label)
+  filters?: Partial<Filters>;  // advanced filters applied on click
+}
+
+const EXAMPLES: Example[] = [
   { label: '3:16',                  hint: 'exact duration' },
   { label: '3:16.423',              hint: 'millisecond precision' },
   { label: '>10:00',                hint: 'longer than 10 minutes' },
   { label: 'love 4:20',             hint: 'keyword + time' },
   { label: 'between 3:00 and 4:00', hint: 'range' },
   { label: 'con*',                  hint: 'starts with' },
-  { label: '*tion',                 hint: 'ends with' },
   { label: 'pink floyd',            hint: 'by artist' },
+  {
+    label:   'rock · 2000s · 100–200 BPM · <3:00 · “duck”',
+    hint:    'A 5-filter Advanced Search combo: rock, released 2000–2009, 100–200 BPM, under 3 minutes, “duck” in the title',
+    query:   '<3:00',
+    filters: { titleContains: 'duck', genre: 'rock', yearFrom: '2000', yearTo: '2009', bpmMin: '100', bpmMax: '200' },
+  },
 ];
 
 type DurationMode = 'exact' | 'range';
@@ -329,14 +341,24 @@ export default function SearchPage() {
   }, [query, filters, perPage, sort, artistsMode, doSearch, router]);
 
   // ── Example chip ──────────────────────────────────────────────────────────
-  const handleExampleClick = useCallback((label: string) => {
-    setQuery(label);
-    setFilters(EMPTY_FILTERS);
+  const handleExampleClick = useCallback((ex: Example) => {
+    const q = ex.query ?? ex.label;
+    const f: Filters = { ...EMPTY_FILTERS, ...(ex.filters ?? {}) };
+    setQuery(q);
+    setFilters(f);
     setResults(null);
     setTolerance(0);
     setPage(1);
-    doSearch(label, 0, EMPTY_FILTERS, 1, perPage, sort);
-    router.replace(`/?q=${encodeURIComponent(label)}`, { scroll: false });
+    // reflect any applied filters in the collapsed advanced summary line
+    if (ex.filters) {
+      const p = parseQuery(q);
+      const durMarker = (p.exactDuration != null || p.minDuration != null || p.maxDuration != null) ? 'x' : '';
+      setAdvSummary(summaryFromFilters(f, durMarker, '', ''));
+    } else {
+      setAdvSummary([]);
+    }
+    doSearch(q, 0, f, 1, perPage, sort);
+    router.replace(buildUrl(q, f, 1, perPage, sort), { scroll: false });
   }, [perPage, sort, doSearch, router]);
 
   // ── Clear ─────────────────────────────────────────────────────────────────
@@ -527,7 +549,7 @@ export default function SearchPage() {
 
         {!hasQuery && !hasFilters && (
           <p className="text-gray-400 text-sm sm:text-base mb-6 text-center px-4">
-            The internet&rsquo;s searchable song-duration database.
+            The internet&rsquo;s premium song search.
           </p>
         )}
 
@@ -902,7 +924,7 @@ export default function SearchPage() {
         {!hasQuery && !hasFilters && (
           <div className="flex flex-wrap gap-2 mt-4 px-4 justify-center max-w-xl">
             {EXAMPLES.map((ex) => (
-              <button key={ex.label} onClick={() => handleExampleClick(ex.label)} title={ex.hint}
+              <button key={ex.label} onClick={() => handleExampleClick(ex)} title={ex.hint}
                 className="text-xs bg-gray-100 hover:bg-blue-50 hover:text-blue-700 text-gray-500 px-3 py-1.5 rounded-full transition-colors font-mono">
                 {ex.label}
               </button>
