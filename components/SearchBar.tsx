@@ -34,7 +34,7 @@ export default function SearchBar({ value, onChange, onSubmit, onClear, loading 
           value={value}
           onChange={(e) => onChange(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter') onSubmit(); }}
-          placeholder='Try "3:30.000", "love 4:20", ">10:00", "3:00 to 4:00"'
+          placeholder='Try "3:30", "love 4:20", ">10:00", "con*", "*tion"'
           className="flex-1 px-3 py-3.5 text-gray-900 placeholder-gray-400 bg-transparent outline-none text-base"
           autoFocus
           autoComplete="off"
@@ -59,7 +59,7 @@ export default function SearchBar({ value, onChange, onSubmit, onClear, loading 
         </button>
       </div>
       <p className="text-xs text-gray-400 mt-1.5 pl-1">
-        Exact (3:16 or 3:16.423), range (3:00 to 4:00), open-ended (&gt;10:00), title, artist. Combine freely.
+        Exact (3:16), range (3:00 to 4:00), open-ended (&gt;10:00), wildcards (con*, *tion), title, artist. Combine freely.
       </p>
     </div>
   );

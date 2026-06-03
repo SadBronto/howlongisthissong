@@ -100,20 +100,37 @@ interface Filters {
   bpmMax?:         number;
 }
 
+/** Convert a user-typed value with optional * wildcards into a SQL LIKE pattern.
+ *  con*  → 'con%'   (starts with)
+ *  *con  → '%con'   (ends with)
+ *  *con* → '%con%'  (contains)
+ *  con   → '%con%'  (default contains, no wildcards)
+ */
+function likePattern(value: string): string {
+  const leading  = value.startsWith('*');
+  const trailing = value.endsWith('*');
+  const core     = value.replace(/^\*+/, '').replace(/\*+$/, '');
+  if (!core) return '%';
+  if (leading && trailing) return `%${core}%`;
+  if (leading)             return `%${core}`;
+  if (trailing)            return `${core}%`;
+  return `%${core}%`;
+}
+
 function buildFilterClauses(f: Filters, alias: string): { sql: string; params: unknown[] } {
   const p     = alias ? `${alias}.` : '';
   const conds: string[]  = [];
   const vals:  unknown[] = [];
-  if (f.titleContains)    { conds.push(`${p}title LIKE ?`);          vals.push(`%${f.titleContains}%`); }
-  if (f.artistContains)   { conds.push(`${p}artist LIKE ?`);         vals.push(`%${f.artistContains}%`); }
-  if (f.genre)            { conds.push(`${p}genre LIKE ?`);          vals.push(`%${f.genre}%`); }
+  if (f.titleContains)    { conds.push(`${p}title LIKE ?`);          vals.push(likePattern(f.titleContains)); }
+  if (f.artistContains)   { conds.push(`${p}artist LIKE ?`);         vals.push(likePattern(f.artistContains)); }
+  if (f.genre)            { conds.push(`${p}genre LIKE ?`);          vals.push(likePattern(f.genre)); }
   if (f.yearFrom != null) { conds.push(`${p}release_year >= ?`);     vals.push(f.yearFrom); }
   if (f.yearTo   != null) { conds.push(`${p}release_year <= ?`);     vals.push(f.yearTo); }
   if (f.releaseType)      { conds.push(`${p}release_type = ?`);      vals.push(f.releaseType); }
-  if (f.label)            { conds.push(`${p}label LIKE ?`);          vals.push(`%${f.label}%`); }
+  if (f.label)            { conds.push(`${p}label LIKE ?`);          vals.push(likePattern(f.label)); }
   if (f.artistType)       { conds.push(`${p}artist_type = ?`);       vals.push(f.artistType); }
   if (f.artistGender)     { conds.push(`${p}artist_gender = ?`);     vals.push(f.artistGender); }
-  if (f.artistCountry)    { conds.push(`${p}artist_country LIKE ?`); vals.push(`%${f.artistCountry}%`); }
+  if (f.artistCountry)    { conds.push(`${p}artist_country LIKE ?`); vals.push(likePattern(f.artistCountry)); }
   if (f.language)         { conds.push(`${p}language LIKE ?`);       vals.push(`%${f.language}%`); }
   if (f.bpmMin != null)   { conds.push(`${p}bpm >= ?`);              vals.push(f.bpmMin); }
   if (f.bpmMax != null)   { conds.push(`${p}bpm <= ?`);              vals.push(f.bpmMax); }
@@ -416,7 +433,16 @@ export default {
     const effectiveFts = parsed.keywords ? sanitizeForFts(parsed.keywords) : '';
     const hasKeywords  = !!effectiveFts;
 
-    if (!hasKeywords && parsed.exactDuration == null && parsed.minDuration == null && parsed.maxDuration == null && !hasFilters) {
+    // Wildcard pattern from main search box (e.g. con* → title/artist LIKE 'con%')
+    const wcPat    = parsed.titleArtistPattern ?? null;
+    const hasWc    = !!wcPat;
+    const wcFts    = hasWc ? { sql: ` AND (t.title LIKE ? OR t.artist LIKE ?)`,   params: [wcPat, wcPat] as unknown[] } : { sql: '', params: [] as unknown[] };
+    const wcDir    = hasWc ? { sql: ` AND (title LIKE ? OR artist LIKE ?)`,        params: [wcPat, wcPat] as unknown[] } : { sql: '', params: [] as unknown[] };
+    // Artists mode: wildcard applies to artist column only
+    const wcArtFts = hasWc ? { sql: ` AND t.artist LIKE ?`, params: [wcPat] as unknown[] } : { sql: '', params: [] as unknown[] };
+    const wcArtDir = hasWc ? { sql: ` AND artist LIKE ?`,   params: [wcPat] as unknown[] } : { sql: '', params: [] as unknown[] };
+
+    if (!hasKeywords && !hasWc && parsed.exactDuration == null && parsed.minDuration == null && parsed.maxDuration == null && !hasFilters) {
       return json({ tracks: [], total: 0, page, perPage, hasMore: false });
     }
 
@@ -488,49 +514,49 @@ export default {
             SELECT t.artist, MAX(COALESCE(t.popularity, 0)) as max_pop
             FROM tracks_fts JOIN tracks t ON t.id = tracks_fts.rowid
             WHERE tracks_fts MATCH ?${durSql}
-            AND t.artist IS NOT NULL${noCfts}${fts.sql}
+            AND t.artist IS NOT NULL${noCfts}${fts.sql}${wcArtFts.sql}
             GROUP BY t.artist
             ${artistObFts}
             LIMIT ${perPage + 1} OFFSET ${offset}
-          `).bind(ftsArtistTerm, ...(dur?.params ?? []), ...fts.params);
+          `).bind(ftsArtistTerm, ...(dur?.params ?? []), ...fts.params, ...wcArtFts.params);
 
           countStmt = env.DB.prepare(`
             SELECT COUNT(*) as n FROM (
               SELECT t.artist FROM tracks_fts JOIN tracks t ON t.id = tracks_fts.rowid
               WHERE tracks_fts MATCH ?${durSql}
-              AND t.artist IS NOT NULL${noCfts}${fts.sql}
+              AND t.artist IS NOT NULL${noCfts}${fts.sql}${wcArtFts.sql}
               GROUP BY t.artist LIMIT 10001
             )
-          `).bind(ftsArtistTerm, ...(dur?.params ?? []), ...fts.params);
+          `).bind(ftsArtistTerm, ...(dur?.params ?? []), ...fts.params, ...wcArtFts.params);
 
         } else if (hasDuration) {
           const dur = buildDurationClause('', minDuration, maxDuration);
           dataStmt = env.DB.prepare(`
             SELECT artist, MAX(COALESCE(popularity, 0)) as max_pop FROM tracks
-            WHERE ${dur.sql} AND artist IS NOT NULL${noC}${dir.sql}
+            WHERE ${dur.sql} AND artist IS NOT NULL${noC}${dir.sql}${wcArtDir.sql}
             GROUP BY artist ${artistOb}
             LIMIT ${perPage + 1} OFFSET ${offset}
-          `).bind(...dur.params, ...dir.params);
+          `).bind(...dur.params, ...dir.params, ...wcArtDir.params);
           countStmt = env.DB.prepare(`
             SELECT COUNT(*) as n FROM (
-              SELECT artist FROM tracks WHERE ${dur.sql} AND artist IS NOT NULL${noC}${dir.sql}
+              SELECT artist FROM tracks WHERE ${dur.sql} AND artist IS NOT NULL${noC}${dir.sql}${wcArtDir.sql}
               GROUP BY artist LIMIT 10001
             )
-          `).bind(...dur.params, ...dir.params);
+          `).bind(...dur.params, ...dir.params, ...wcArtDir.params);
 
         } else {
           dataStmt = env.DB.prepare(`
             SELECT artist, MAX(COALESCE(popularity, 0)) as max_pop FROM tracks
-            WHERE artist IS NOT NULL${noC}${dir.sql}
+            WHERE artist IS NOT NULL${noC}${dir.sql}${wcArtDir.sql}
             GROUP BY artist ${artistOb}
             LIMIT ${perPage + 1} OFFSET ${offset}
-          `).bind(...dir.params);
+          `).bind(...dir.params, ...wcArtDir.params);
           countStmt = env.DB.prepare(`
             SELECT COUNT(*) as n FROM (
-              SELECT artist FROM tracks WHERE artist IS NOT NULL${noC}${dir.sql}
+              SELECT artist FROM tracks WHERE artist IS NOT NULL${noC}${dir.sql}${wcArtDir.sql}
               GROUP BY artist LIMIT 10001
             )
-          `).bind(...dir.params);
+          `).bind(...dir.params, ...wcArtDir.params);
         }
 
         const [result, countResult] = await Promise.all([
@@ -566,54 +592,54 @@ export default {
         dataStmt = env.DB.prepare(`
           SELECT ${JOINED_COLS}
           FROM tracks_fts JOIN tracks t ON t.id = tracks_fts.rowid
-          WHERE tracks_fts MATCH ? AND ${dur.sql}${fts.sql}
+          WHERE tracks_fts MATCH ? AND ${dur.sql}${fts.sql}${wcFts.sql}
           ${obF} LIMIT ${perPage + 1} OFFSET ${offset}
-        `).bind(effectiveFts, ...dur.params, ...fts.params);
+        `).bind(effectiveFts, ...dur.params, ...fts.params, ...wcFts.params);
         countStmt = env.DB.prepare(`
           SELECT COUNT(*) as n FROM (
             SELECT 1 FROM tracks_fts JOIN tracks t ON t.id = tracks_fts.rowid
-            WHERE tracks_fts MATCH ? AND ${dur.sql}${fts.sql} LIMIT 10001
+            WHERE tracks_fts MATCH ? AND ${dur.sql}${fts.sql}${wcFts.sql} LIMIT 10001
           )
-        `).bind(effectiveFts, ...dur.params, ...fts.params);
+        `).bind(effectiveFts, ...dur.params, ...fts.params, ...wcFts.params);
 
       } else if (hasKeywords) {
         dataStmt = env.DB.prepare(`
           SELECT ${JOINED_COLS}
           FROM tracks_fts JOIN tracks t ON t.id = tracks_fts.rowid
-          WHERE tracks_fts MATCH ?${fts.sql}
+          WHERE tracks_fts MATCH ?${fts.sql}${wcFts.sql}
           ${obF} LIMIT ${perPage + 1} OFFSET ${offset}
-        `).bind(effectiveFts, ...fts.params);
+        `).bind(effectiveFts, ...fts.params, ...wcFts.params);
         countStmt = env.DB.prepare(`
           SELECT COUNT(*) as n FROM (
             SELECT 1 FROM tracks_fts JOIN tracks t ON t.id = tracks_fts.rowid
-            WHERE tracks_fts MATCH ?${fts.sql} LIMIT 10001
+            WHERE tracks_fts MATCH ?${fts.sql}${wcFts.sql} LIMIT 10001
           )
-        `).bind(effectiveFts, ...fts.params);
+        `).bind(effectiveFts, ...fts.params, ...wcFts.params);
 
       } else if (hasDuration) {
         const dur = buildDurationClause('', minDuration, maxDuration);
         dataStmt = env.DB.prepare(`
           SELECT ${DIRECT_COLS} FROM tracks
-          WHERE ${dur.sql}${dir.sql}
+          WHERE ${dur.sql}${dir.sql}${wcDir.sql}
           ${ob} LIMIT ${perPage + 1} OFFSET ${offset}
-        `).bind(...dur.params, ...dir.params);
+        `).bind(...dur.params, ...dir.params, ...wcDir.params);
         countStmt = env.DB.prepare(`
           SELECT COUNT(*) as n FROM (
-            SELECT 1 FROM tracks WHERE ${dur.sql}${dir.sql} LIMIT 10001
+            SELECT 1 FROM tracks WHERE ${dur.sql}${dir.sql}${wcDir.sql} LIMIT 10001
           )
-        `).bind(...dur.params, ...dir.params);
+        `).bind(...dur.params, ...dir.params, ...wcDir.params);
 
       } else {
         dataStmt = env.DB.prepare(`
           SELECT ${DIRECT_COLS} FROM tracks
-          WHERE 1=1${dir.sql}
+          WHERE 1=1${dir.sql}${wcDir.sql}
           ${ob} LIMIT ${perPage + 1} OFFSET ${offset}
-        `).bind(...dir.params);
+        `).bind(...dir.params, ...wcDir.params);
         countStmt = env.DB.prepare(`
           SELECT COUNT(*) as n FROM (
-            SELECT 1 FROM tracks WHERE 1=1${dir.sql} LIMIT 10001
+            SELECT 1 FROM tracks WHERE 1=1${dir.sql}${wcDir.sql} LIMIT 10001
           )
-        `).bind(...dir.params);
+        `).bind(...dir.params, ...wcDir.params);
       }
 
       const [result, countResult] = await Promise.all([

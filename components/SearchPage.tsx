@@ -13,7 +13,8 @@ const EXAMPLES = [
   { label: '>10:00',                hint: 'longer than 10 minutes' },
   { label: 'love 4:20',             hint: 'keyword + time' },
   { label: 'between 3:00 and 4:00', hint: 'range' },
-  { label: 'bohemian rhapsody',     hint: 'by title' },
+  { label: 'con*',                  hint: 'starts with' },
+  { label: '*tion',                 hint: 'ends with' },
   { label: 'pink floyd',            hint: 'by artist' },
 ];
 
@@ -548,13 +549,13 @@ export default function SearchPage() {
                     <label className="text-xs font-medium text-gray-500 mb-1 block">Title</label>
                     <input value={advTitle} onChange={e => setAdvTitle(e.target.value)}
                       onKeyDown={e => { if (e.key === 'Enter') handleAdvancedSubmit(); }}
-                      placeholder="Bohemian Rhapsody" className={ADV_INPUT} />
+                      placeholder="Bohemian* or *rhapsody" className={ADV_INPUT} />
                   </div>
                   <div>
                     <label className="text-xs font-medium text-gray-500 mb-1 block">Artist</label>
                     <input value={advArtist} onChange={e => setAdvArtist(e.target.value)}
                       onKeyDown={e => { if (e.key === 'Enter') handleAdvancedSubmit(); }}
-                      placeholder="Queen" className={ADV_INPUT} />
+                      placeholder="Queen or *smith*" className={ADV_INPUT} />
                   </div>
                 </div>
 

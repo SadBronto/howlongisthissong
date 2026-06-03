@@ -2,6 +2,7 @@
 
 export interface ParsedQuery {
   keywords?: string;
+  titleArtistPattern?: string;    // SQL LIKE pattern from wildcard token (con* → 'con%')
   exactDuration?: number;         // ms — floor of the typed time
   exactDurationWindowMs?: number; // 1000 for M:SS | 100 for M:SS.M | 10 | 1
   minDuration?: number;           // ms — range / open-ended lower bound
@@ -86,6 +87,25 @@ export function parseQuery(input: string): ParsedQuery {
       result.exactDuration         = parseDurationMs(em[1]);
       result.exactDurationWindowMs = windowMsFor(em[1]);
       q = q.replace(em[0], '').trim();
+    }
+  }
+
+  // Extract wildcard tokens: con* → starts-with, *con → ends-with, *con* → contains
+  // Only the first wildcard word is used; the rest become normal FTS keywords.
+  const words = q.split(/\s+/).filter(Boolean);
+  const wcIdx = words.findIndex(w => w.includes('*'));
+  if (wcIdx !== -1) {
+    const wc   = words[wcIdx];
+    const core = wc.replace(/^\*+/, '').replace(/\*+$/, '');
+    if (core) {
+      const leading  = wc.startsWith('*');
+      const trailing = wc.endsWith('*');
+      result.titleArtistPattern =
+        (leading && trailing) ? `%${core}%` :
+        leading               ? `%${core}`  :
+        trailing              ? `${core}%`  : `%${core}%`;
+      words.splice(wcIdx, 1);
+      q = words.join(' ');
     }
   }
 
