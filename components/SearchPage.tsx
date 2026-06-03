@@ -23,8 +23,8 @@ const EXAMPLES: Example[] = [
   { label: 'con*',                  hint: 'starts with' },
   { label: 'pink floyd',            hint: 'by artist' },
   {
-    label:   'rock · 2000s · 100–200 BPM · <3:00 · “duck”',
-    hint:    'A 5-filter Advanced Search combo: rock, released 2000–2009, 100–200 BPM, under 3 minutes, “duck” in the title',
+    label:   'rock songs from the 2000s between 100 and 200 BPM that are under 3 minutes and have “duck” in the title',
+    hint:    'Click to run this as a combined Advanced Search',
     query:   '<3:00',
     filters: { titleContains: 'duck', genre: 'rock', yearFrom: '2000', yearTo: '2009', bpmMin: '100', bpmMax: '200' },
   },
