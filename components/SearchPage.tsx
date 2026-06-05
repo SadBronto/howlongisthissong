@@ -287,6 +287,12 @@ export default function SearchPage() {
     const controller = new AbortController();
     abortRef.current = controller;
 
+    // Fail fast (~20s) instead of hanging on slow filter-only table scans.
+    const timeoutId = setTimeout(
+      () => controller.abort(new DOMException('Search timed out', 'TimeoutError')),
+      20000,
+    );
+
     setLoading(true);
     setError(null);
 
@@ -319,13 +325,18 @@ export default function SearchPage() {
       const res = await fetch(`${base}?${params}`, { signal: controller.signal });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data: SearchResult = await res.json();
-      if (!controller.signal.aborted) setResults(data);
+      if (abortRef.current === controller) setResults(data);
     } catch (err) {
-      if (err instanceof Error && err.name !== 'AbortError') {
+      if (abortRef.current !== controller) return; // superseded by a newer search
+      const name = err instanceof Error ? err.name : '';
+      if (name === 'TimeoutError') {
+        setError('That search is taking too long. Filter-only searches scan the whole library — add a word from the title or artist and it’ll return almost instantly.');
+      } else if (name !== 'AbortError') {
         setError('Search failed. Check your connection and try again.');
       }
     } finally {
-      if (!controller.signal.aborted) setLoading(false);
+      clearTimeout(timeoutId);
+      if (abortRef.current === controller) setLoading(false);
     }
   }, []);
 
