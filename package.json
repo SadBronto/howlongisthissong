@@ -21,7 +21,8 @@
     "enrich-acousticbrainz": "set NODE_OPTIONS=--max-old-space-size=8192 && tsx scripts/enrich-acousticbrainz.ts",
     "sync-mb-daily": "tsx scripts/sync-mb-daily.ts",
     "build-popularity-queue": "tsx scripts/build-popularity-queue.ts",
-    "migrate-popularity-queue-priority": "tsx scripts/migrate-popularity-queue-priority.ts"
+    "migrate-popularity-queue-priority": "tsx scripts/migrate-popularity-queue-priority.ts",
+    "add-search-indexes": "tsx scripts/add-search-indexes.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.4",

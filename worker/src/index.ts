@@ -98,6 +98,10 @@ interface Filters {
   language?:       string;
   bpmMin?:         number;
   bpmMax?:         number;
+  titleLenMin?:    number;
+  titleLenMax?:    number;
+  artistLenMin?:   number;
+  artistLenMax?:   number;
 }
 
 /** Convert a user-typed value with optional * wildcards into a SQL LIKE pattern.
@@ -136,6 +140,10 @@ function buildFilterClauses(f: Filters, alias: string): { sql: string; params: u
   if (f.language)         { conds.push(`${p}language LIKE ?`);       vals.push(`%${f.language}%`); }
   if (f.bpmMin != null)   { conds.push(`${p}bpm >= ?`);              vals.push(f.bpmMin); }
   if (f.bpmMax != null)   { conds.push(`${p}bpm <= ?`);              vals.push(f.bpmMax); }
+  if (f.titleLenMin  != null) { conds.push(`LENGTH(${p}title) >= ?`);  vals.push(f.titleLenMin); }
+  if (f.titleLenMax  != null) { conds.push(`LENGTH(${p}title) <= ?`);  vals.push(f.titleLenMax); }
+  if (f.artistLenMin != null) { conds.push(`LENGTH(${p}artist) >= ?`); vals.push(f.artistLenMin); }
+  if (f.artistLenMax != null) { conds.push(`LENGTH(${p}artist) <= ?`); vals.push(f.artistLenMax); }
   return { sql: conds.length ? ' AND ' + conds.join(' AND ') : '', params: vals };
 }
 
@@ -410,18 +418,28 @@ export default {
     const bpmMaxRaw      = url.searchParams.get('bpm_max');
     const bpmMin         = bpmMinRaw ? parseFloat(bpmMinRaw) : undefined;
     const bpmMax         = bpmMaxRaw ? parseFloat(bpmMaxRaw) : undefined;
+    const titleLenMinRaw  = url.searchParams.get('title_len_min');
+    const titleLenMaxRaw  = url.searchParams.get('title_len_max');
+    const artistLenMinRaw = url.searchParams.get('artist_len_min');
+    const artistLenMaxRaw = url.searchParams.get('artist_len_max');
+    const titleLenMin    = titleLenMinRaw  ? parseInt(titleLenMinRaw,  10) : undefined;
+    const titleLenMax    = titleLenMaxRaw  ? parseInt(titleLenMaxRaw,  10) : undefined;
+    const artistLenMin   = artistLenMinRaw ? parseInt(artistLenMinRaw, 10) : undefined;
+    const artistLenMax   = artistLenMaxRaw ? parseInt(artistLenMaxRaw, 10) : undefined;
 
     const filters: Filters = {
       titleContains, artistContains, genre, yearFrom, yearTo,
       releaseType, label, artistType, artistGender, artistCountry, language,
-      bpmMin, bpmMax,
+      bpmMin, bpmMax, titleLenMin, titleLenMax, artistLenMin, artistLenMax,
     };
     const hasFilters = !!(
       titleContains || artistContains || genre ||
       yearFrom != null || yearTo != null ||
       releaseType || label ||
       artistType || artistGender || artistCountry || language ||
-      bpmMin != null || bpmMax != null
+      bpmMin != null || bpmMax != null ||
+      titleLenMin != null || titleLenMax != null ||
+      artistLenMin != null || artistLenMax != null
     );
 
     const page       = Math.max(1, Math.min(500, parseInt(url.searchParams.get('page')     ?? '1',  10) || 1));

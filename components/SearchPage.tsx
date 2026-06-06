@@ -24,9 +24,9 @@ const EXAMPLES: Example[] = [
   { label: 'pink floyd',            hint: 'by artist' },
   {
     label:   'rock songs from the 2000s between 100 and 200 BPM that are under 3 minutes and have “duck” in the title',
-    hint:    'Click to run this as a combined Advanced Search',
-    query:   '<3:00',
-    filters: { titleContains: 'duck', genre: 'rock', yearFrom: '2000', yearTo: '2009', bpmMin: '100', bpmMax: '200' },
+    hint:    'A keyword + filters combo — runs through the fast text index',
+    query:   'duck <3:00',
+    filters: { genre: 'rock', yearFrom: '2000', yearTo: '2009', bpmMin: '100', bpmMax: '200' },
   },
 ];
 
@@ -111,12 +111,17 @@ interface Filters {
   language:       string;
   bpmMin:         string;
   bpmMax:         string;
+  titleLenMin:    string;
+  titleLenMax:    string;
+  artistLenMin:   string;
+  artistLenMax:   string;
 }
 const EMPTY_FILTERS: Filters = {
   titleContains: '', artistContains: '',
   genre: '', yearFrom: '', yearTo: '', releaseType: '', label: '',
   artistType: '', artistGender: '', artistCountry: '', language: '',
   bpmMin: '', bpmMax: '',
+  titleLenMin: '', titleLenMax: '', artistLenMin: '', artistLenMax: '',
 };
 
 function filtersFromParams(sp: URLSearchParams): Filters {
@@ -134,6 +139,10 @@ function filtersFromParams(sp: URLSearchParams): Filters {
     language:       sp.get('language')       ?? '',
     bpmMin:         sp.get('bpm_min')        ?? '',
     bpmMax:         sp.get('bpm_max')        ?? '',
+    titleLenMin:    sp.get('title_len_min')  ?? '',
+    titleLenMax:    sp.get('title_len_max')  ?? '',
+    artistLenMin:   sp.get('artist_len_min') ?? '',
+    artistLenMax:   sp.get('artist_len_max') ?? '',
   };
 }
 
@@ -154,6 +163,10 @@ function buildUrl(q: string, f: Filters, pg: number, pp: number, s: string, am =
   if (f.language)       p.set('language',       f.language);
   if (f.bpmMin)         p.set('bpm_min',        f.bpmMin);
   if (f.bpmMax)         p.set('bpm_max',        f.bpmMax);
+  if (f.titleLenMin)    p.set('title_len_min',  f.titleLenMin);
+  if (f.titleLenMax)    p.set('title_len_max',  f.titleLenMax);
+  if (f.artistLenMin)   p.set('artist_len_min', f.artistLenMin);
+  if (f.artistLenMax)   p.set('artist_len_max', f.artistLenMax);
   if (pg > 1)           p.set('page',           String(pg));
   if (pp !== 50)        p.set('per_page',       String(pp));
   if (s !== 'relevance') p.set('sort',          s);
@@ -166,7 +179,9 @@ function activeCount(f: Filters): number {
     f.titleContains, f.artistContains, f.genre,
     f.yearFrom || f.yearTo,   // range counts as one filter
     f.releaseType, f.label, f.artistType, f.artistGender, f.artistCountry, f.language,
-    f.bpmMin || f.bpmMax,     // range counts as one filter
+    f.bpmMin || f.bpmMax,           // range counts as one filter
+    f.titleLenMin || f.titleLenMax, // range counts as one filter
+    f.artistLenMin || f.artistLenMax,
   ].filter(Boolean).length;
 }
 
@@ -185,6 +200,8 @@ function summaryFromFilters(f: Filters, exact: string, from: string, to: string)
   if (f.artistCountry)  s.push('Country');
   if (f.language)       s.push('Language');
   if (f.bpmMin || f.bpmMax) s.push('BPM');
+  if (f.titleLenMin || f.titleLenMax) s.push('Title length');
+  if (f.artistLenMin || f.artistLenMax) s.push('Artist length');
   return s;
 }
 
@@ -271,6 +288,10 @@ export default function SearchPage() {
   const [showLangModal,    setShowLangModal]    = useState(false);
   const [advBpmMin,        setAdvBpmMin]        = useState('');
   const [advBpmMax,        setAdvBpmMax]        = useState('');
+  const [advTitleLenMin,   setAdvTitleLenMin]   = useState('');
+  const [advTitleLenMax,   setAdvTitleLenMax]   = useState('');
+  const [advArtistLenMin,  setAdvArtistLenMin]  = useState('');
+  const [advArtistLenMax,  setAdvArtistLenMax]  = useState('');
 
   const abortRef        = useRef<AbortController | null>(null);
   const scrollToTopRef  = useRef(false);
@@ -317,6 +338,10 @@ export default function SearchPage() {
       if (f.language)         params.set('language',       f.language);
       if (f.bpmMin)           params.set('bpm_min',        f.bpmMin);
       if (f.bpmMax)           params.set('bpm_max',        f.bpmMax);
+      if (f.titleLenMin)      params.set('title_len_min',  f.titleLenMin);
+      if (f.titleLenMax)      params.set('title_len_max',  f.titleLenMax);
+      if (f.artistLenMin)     params.set('artist_len_min', f.artistLenMin);
+      if (f.artistLenMax)     params.set('artist_len_max', f.artistLenMax);
       if (am)                 params.set('mode',           'artists');
       params.set('page',     String(pg));
       params.set('per_page', String(pp));
@@ -446,6 +471,10 @@ export default function SearchPage() {
       language:       advLanguage,
       bpmMin:         advBpmMin.trim(),
       bpmMax:         advBpmMax.trim(),
+      titleLenMin:    advTitleLenMin.trim(),
+      titleLenMax:    advTitleLenMax.trim(),
+      artistLenMin:   advArtistLenMin.trim(),
+      artistLenMax:   advArtistLenMax.trim(),
     };
     if (!compiled && activeCount(newFilters) === 0) return;
     setResults(null);
@@ -465,6 +494,7 @@ export default function SearchPage() {
       advGenre, advYearFrom, advYearTo, advRelType, advLabel,
       advArtistType, advArtistGender, advArtistCountry, advLanguage,
       advBpmMin, advBpmMax,
+      advTitleLenMin, advTitleLenMax, advArtistLenMin, advArtistLenMax,
       perPage, sort, doSearch, router]);
 
   // ── Remove a single filter (or a paired range) and re-run the search ────────
@@ -505,6 +535,10 @@ export default function SearchPage() {
       setAdvLangIsOther(!!filters.language && !TOP_LANG_CODES.has(filters.language));
       setAdvBpmMin(filters.bpmMin);
       setAdvBpmMax(filters.bpmMax);
+      setAdvTitleLenMin(filters.titleLenMin);
+      setAdvTitleLenMax(filters.titleLenMax);
+      setAdvArtistLenMin(filters.artistLenMin);
+      setAdvArtistLenMax(filters.artistLenMax);
     }
   }, [advExpanded]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -835,6 +869,37 @@ export default function SearchPage() {
                   </div>
                 </div>
 
+                {/* Name length (number of characters) */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs font-medium text-gray-500 mb-1 block">Title length</label>
+                    <div className="flex items-center gap-2">
+                      <input value={advTitleLenMin} onChange={e => setAdvTitleLenMin(e.target.value.replace(/\D/g, ''))}
+                        onKeyDown={e => { if (e.key === 'Enter') handleAdvancedSubmit(); }}
+                        placeholder="Min" className={`${ADV_INPUT} w-20`} maxLength={3} inputMode="numeric" />
+                      <span className="text-xs text-gray-400 flex-shrink-0">to</span>
+                      <input value={advTitleLenMax} onChange={e => setAdvTitleLenMax(e.target.value.replace(/\D/g, ''))}
+                        onKeyDown={e => { if (e.key === 'Enter') handleAdvancedSubmit(); }}
+                        placeholder="Max" className={`${ADV_INPUT} w-20`} maxLength={3} inputMode="numeric" />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-gray-500 mb-1 block">Artist name length</label>
+                    <div className="flex items-center gap-2">
+                      <input value={advArtistLenMin} onChange={e => setAdvArtistLenMin(e.target.value.replace(/\D/g, ''))}
+                        onKeyDown={e => { if (e.key === 'Enter') handleAdvancedSubmit(); }}
+                        placeholder="Min" className={`${ADV_INPUT} w-20`} maxLength={3} inputMode="numeric" />
+                      <span className="text-xs text-gray-400 flex-shrink-0">to</span>
+                      <input value={advArtistLenMax} onChange={e => setAdvArtistLenMax(e.target.value.replace(/\D/g, ''))}
+                        onKeyDown={e => { if (e.key === 'Enter') handleAdvancedSubmit(); }}
+                        placeholder="Max" className={`${ADV_INPUT} w-20`} maxLength={3} inputMode="numeric" />
+                    </div>
+                  </div>
+                </div>
+                <p className="text-xs text-gray-400 -mt-1">
+                  Length = number of characters in the name. Tip: pair it with a keyword or another filter — length on its own scans the whole library and is slow.
+                </p>
+
                 {/* Actions */}
                 <div className="flex items-center gap-3">
                   <button
@@ -846,7 +911,8 @@ export default function SearchPage() {
                   {(advGenre || advYearFrom || advYearTo || advRelType || advLabel ||
                     advTitle || advArtist || advExact || advFrom || advTo ||
                     advArtistType || advArtistGender || advArtistCountry || advLanguage ||
-                    advBpmMin || advBpmMax) && (
+                    advBpmMin || advBpmMax ||
+                    advTitleLenMin || advTitleLenMax || advArtistLenMin || advArtistLenMax) && (
                     <button
                       onClick={() => {
                         setAdvGenre(''); setAdvYearFrom(''); setAdvYearTo('');
@@ -857,6 +923,8 @@ export default function SearchPage() {
                         setAdvArtistCountry(''); setAdvLanguage('');
                         setAdvLangIsOther(false);
                         setAdvBpmMin(''); setAdvBpmMax('');
+                        setAdvTitleLenMin(''); setAdvTitleLenMax('');
+                        setAdvArtistLenMin(''); setAdvArtistLenMax('');
                         setAdvSummary([]);
                       }}
                       className="text-xs text-gray-400 hover:text-red-500 transition-colors"
@@ -913,6 +981,22 @@ export default function SearchPage() {
                   ? `${filters.bpmMin}–${filters.bpmMax} BPM`
                   : filters.bpmMin ? `≥${filters.bpmMin} BPM` : `≤${filters.bpmMax} BPM`}
                 onRemove={() => removeFilter(['bpmMin', 'bpmMax'])}
+              />
+            )}
+            {(filters.titleLenMin || filters.titleLenMax) && (
+              <FilterChip
+                label={filters.titleLenMin && filters.titleLenMax
+                  ? `title ${filters.titleLenMin}–${filters.titleLenMax} chars`
+                  : filters.titleLenMin ? `title ≥${filters.titleLenMin} chars` : `title ≤${filters.titleLenMax} chars`}
+                onRemove={() => removeFilter(['titleLenMin', 'titleLenMax'])}
+              />
+            )}
+            {(filters.artistLenMin || filters.artistLenMax) && (
+              <FilterChip
+                label={filters.artistLenMin && filters.artistLenMax
+                  ? `artist ${filters.artistLenMin}–${filters.artistLenMax} chars`
+                  : filters.artistLenMin ? `artist ≥${filters.artistLenMin} chars` : `artist ≤${filters.artistLenMax} chars`}
+                onRemove={() => removeFilter(['artistLenMin', 'artistLenMax'])}
               />
             )}
             <button
