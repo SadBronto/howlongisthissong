@@ -584,12 +584,14 @@ export default function SearchPage() {
           onClick={(e) => { e.preventDefault(); handleClear(); setAdvExpanded(false); }}
           className="no-underline"
         >
-          <h1 className={`font-bold text-gray-900 tracking-tight transition-all duration-200 select-none ${
+          {/* Visible brand logo. Not the semantic <h1> — that's server-rendered in
+              app/page.tsx so scanners/search see the page's purpose in the initial HTML. */}
+          <div className={`font-bold text-gray-900 tracking-tight transition-all duration-200 select-none ${
             hasQuery || hasFilters ? 'text-xl mb-3' : 'text-3xl sm:text-5xl mb-4'
           }`}>
             <span className="text-blue-600">HowLong</span>IsThisSong
             <span className="text-gray-300">.com</span>
-          </h1>
+          </div>
         </a>
 
         {!hasQuery && !hasFilters && (
