@@ -123,6 +123,17 @@ function likePattern(value: string): string {
   return `${left}${core}${right}`;
 }
 
+/** Turn an advanced Title/Artist value into a column-scoped FTS prefix query so it
+ *  uses the fast text index instead of a full-table LIKE scan.
+ *  "Corner" → 'title:corner*' ; "Street Corner" → 'title:street* title:corner*'
+ *  Tokens are lowercased alphanumerics (avoids FTS operator/syntax issues).
+ *  Returns '' if there are no usable tokens. */
+function columnFtsTerm(col: 'title' | 'artist', value: string): string {
+  const tokens = value.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
+  if (tokens.length === 0) return '';
+  return tokens.map(t => `${col}:${t}*`).join(' ');
+}
+
 function buildFilterClauses(f: Filters, alias: string): { sql: string; params: unknown[] } {
   const p     = alias ? `${alias}.` : '';
   const conds: string[]  = [];
@@ -449,9 +460,27 @@ export default {
     const offset     = (page - 1) * perPage;
     const artistsMode = url.searchParams.get('mode') === 'artists';
 
-    const parsed       = parseQuery(q);
-    const effectiveFts = parsed.keywords ? sanitizeForFts(parsed.keywords) : '';
+    const parsed = parseQuery(q);
+
+    // Fold advanced Title/Artist text into the FTS query so they hit the fast text
+    // index instead of a full-table LIKE scan (the cause of "Title: Corner" timing out).
+    // Only when there's no LEADING wildcard — a leading '*' means suffix/contains, which
+    // FTS can't do, so those intentionally stay a (slower, opt-in) LIKE scan.
+    const titleFold  = titleContains  && !titleContains.startsWith('*')  ? columnFtsTerm('title',  titleContains)  : '';
+    const artistFold = artistContains && !artistContains.startsWith('*') ? columnFtsTerm('artist', artistContains) : '';
+
+    const ftsParts: string[] = [];
+    if (parsed.keywords) ftsParts.push(sanitizeForFts(parsed.keywords));
+    if (titleFold)  ftsParts.push(titleFold);
+    if (artistFold) ftsParts.push(artistFold);
+    const effectiveFts = ftsParts.join(' ');
     const hasKeywords  = !!effectiveFts;
+
+    // Title/Artist now handled by FTS are dropped from the LIKE filters so the slow
+    // scan never runs; every other filter (genre, year, BPM, length…) is unaffected.
+    const filtersForLike: Filters = { ...filters };
+    if (titleFold)  delete filtersForLike.titleContains;
+    if (artistFold) delete filtersForLike.artistContains;
 
     // Wildcard pattern from main search box (e.g. con* → title/artist LIKE 'con%_')
     const wcPat    = parsed.wildcardToken ? likePattern(parsed.wildcardToken) : null;
@@ -599,8 +628,8 @@ export default {
     }
 
     try {
-      const fts = buildFilterClauses(filters, 't');
-      const dir = buildFilterClauses(filters, '');
+      const fts = buildFilterClauses(filtersForLike, 't');
+      const dir = buildFilterClauses(filtersForLike, '');
       const ob  = buildOrderBy(sort, false);
       const obF = buildOrderBy(sort, true);
 
