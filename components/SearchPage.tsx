@@ -252,6 +252,7 @@ export default function SearchPage() {
   const [results,     setResults]     = useState<SearchResult | null>(null);
   const [loading,     setLoading]     = useState(false);
   const [error,       setError]       = useState<string | null>(null);
+  const [slowSearch,  setSlowSearch]  = useState(false);  // true once a search has run >5s
 
   // ── Pagination + sort state ────────────────────────────────────────────────
   const [page, setPage] = useState(() =>
@@ -308,11 +309,18 @@ export default function SearchPage() {
     const controller = new AbortController();
     abortRef.current = controller;
 
-    // Fail fast (~20s) instead of hanging on slow filter-only table scans.
+    // Some searches (leading-wildcard substrings, filter-only) must scan the whole
+    // library and genuinely take time — but they DO return real results. So we don't
+    // cut them off early; we let them run (with a 5-min safety net for a truly stuck
+    // connection) and, after 5s, show an explainer so the user knows it's still working.
     const timeoutId = setTimeout(
       () => controller.abort(new DOMException('Search timed out', 'TimeoutError')),
-      20000,
+      300_000,
     );
+    setSlowSearch(false);
+    const slowId = setTimeout(() => {
+      if (abortRef.current === controller) setSlowSearch(true);
+    }, 5000);
 
     setLoading(true);
     setError(null);
@@ -355,13 +363,14 @@ export default function SearchPage() {
       if (abortRef.current !== controller) return; // superseded by a newer search
       const name = err instanceof Error ? err.name : '';
       if (name === 'TimeoutError') {
-        setError('That search is taking too long. Filter-only searches scan the whole library — add a word from the title or artist and it’ll return almost instantly.');
+        setError('This search ran for 5 minutes without finishing — that’s unusual. Try adding a word from the title or artist, or removing a leading “*” wildcard, to speed it up.');
       } else if (name !== 'AbortError') {
-        setError('Search failed. Check your connection and try again.');
+        setError('Search failed. Please try again in a moment.');
       }
     } finally {
       clearTimeout(timeoutId);
-      if (abortRef.current === controller) setLoading(false);
+      clearTimeout(slowId);
+      if (abortRef.current === controller) { setLoading(false); setSlowSearch(false); }
     }
   }, []);
 
@@ -1033,6 +1042,30 @@ export default function SearchPage() {
       <main className="flex-1 w-full max-w-2xl mx-auto px-4 pb-20">
         {error && (
           <p className="text-red-500 text-sm text-center mt-8 bg-red-50 py-3 px-4 rounded-lg">{error}</p>
+        )}
+
+        {loading && slowSearch && !error && (
+          <div className="mt-6 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900">
+            <div className="flex items-center gap-2 font-medium">
+              <svg className="animate-spin h-4 w-4 flex-shrink-0" viewBox="0 0 24 24" fill="none">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+              </svg>
+              Still working — this one&rsquo;s the slow kind.
+            </div>
+            <p className="mt-1.5 text-blue-800 leading-relaxed">
+              We don&rsquo;t run the heavy-duty search hardware the big sites do, so some searches have to
+              scan the whole library the hard way and simply take time (sometimes a lot of it). As long as
+              you see this message, we <span className="font-semibold">are</span> still gathering your
+              results — we just can&rsquo;t estimate how long it&rsquo;ll take.
+            </p>
+            <p className="mt-1.5 text-blue-800 leading-relaxed">
+              Want them faster? Searches that begin with a wildcard (like <code className="font-mono">*corner</code>)
+              or use only filters are the slow ones. Adding a plain word from the title or artist —{' '}
+              <code className="font-mono">corner</code> instead of <code className="font-mono">*corner</code> — is
+              usually instant.
+            </p>
+          </div>
         )}
 
         {(hasQuery || hasFilters) && !hasResults && !error && (
