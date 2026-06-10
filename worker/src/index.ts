@@ -168,8 +168,10 @@ function buildOrderBy(sort: string, fts: boolean): string {
   if (sort === 'asc')  return `ORDER BY ${p}duration_ms ASC`;
   if (sort === 'desc') return `ORDER BY ${p}duration_ms DESC`;
   const scoreExpr = `CASE WHEN ${p}popularity > 0 THEN ${p}popularity ELSE MIN(CAST(${p}search_count * 10 AS INTEGER), 30) END`;
+  // FTS tiebreak uses weighted bm25 so a title match beats an artist match beats an
+  // album-only match (columns are title, artist, album). Lower bm25 = better match.
   return fts
-    ? `ORDER BY ${scoreExpr} DESC, tracks_fts.rank`
+    ? `ORDER BY ${scoreExpr} DESC, bm25(tracks_fts, 10.0, 4.0, 1.0)`
     : `ORDER BY ${scoreExpr} DESC, duration_ms`;
 }
 
