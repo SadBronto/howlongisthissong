@@ -517,10 +517,18 @@ export default {
     // ── Artists mode ──────────────────────────────────────────────────────────
     if (artistsMode) {
       try {
-        const fts = buildFilterClauses(filters, 't');
-        const dir = buildFilterClauses(filters, '');
+        const fts = buildFilterClauses(filtersForLike, 't');
+        const dir = buildFilterClauses(filtersForLike, '');
+        // Route the artist keyword AND any advanced Title/Artist text through the FTS
+        // index (instead of a full-table LIKE scan) so "Artists only" + a title/artist
+        // filter stays fast. The main search box is treated as an artist search here.
         const artistKeyword = parsed.keywords?.trim() ?? '';
-        const hasArtistKeyword = !!artistKeyword;
+        const artistFtsParts: string[] = [];
+        if (artistKeyword) artistFtsParts.push(`artist:"${artistKeyword.replace(/"/g, '""')}"`);
+        if (artistFold)    artistFtsParts.push(artistFold);
+        if (titleFold)     artistFtsParts.push(titleFold);
+        const artistFtsTerm  = artistFtsParts.join(' ');
+        const hasArtistFts   = !!artistFtsTerm;
 
         // Exclude collaboration/credit strings — standalone band names only
         const collabPatterns = [
@@ -554,10 +562,10 @@ export default {
         let dataStmt:  D1PreparedStatement;
         let countStmt: D1PreparedStatement;
 
-        if (hasArtistKeyword) {
-          // FTS column-specific search: only matches against the artist column,
-          // avoids full table scan. Ordered by peak track popularity.
-          const ftsArtistTerm = `artist:"${artistKeyword.replace(/"/g, '""')}"`;
+        if (hasArtistFts) {
+          // FTS column-specific search (artist keyword + folded advanced text):
+          // avoids a full-table GROUP BY scan. Ordered by peak track popularity.
+          const ftsArtistTerm = artistFtsTerm;
           const dur    = hasDuration ? buildDurationClause('t', minDuration, maxDuration) : null;
           const durSql = dur ? ` AND ${dur.sql}` : '';
 
