@@ -122,7 +122,10 @@ interface Filters {
 function likePattern(value: string): string {
   const leading  = value.startsWith('*');
   const trailing = value.endsWith('*');
-  const core     = value.replace(/^\*+/, '').replace(/\*+$/, '');
+  // Escape LIKE metacharacters in the literal text (\ % _) so they match literally.
+  // Clauses that use this pattern include ESCAPE '\'. The * → %/_ wildcards are added
+  // AFTER escaping, so they keep their wildcard meaning.
+  const core = value.replace(/^\*+/, '').replace(/\*+$/, '').replace(/[\\%_]/g, m => '\\' + m);
   if (!core) return '%';
   if (!leading && !trailing) return `%${core}%`;
   const left  = leading  ? '_%' : '';
@@ -145,16 +148,24 @@ function buildFilterClauses(f: Filters, alias: string): { sql: string; params: u
   const p     = alias ? `${alias}.` : '';
   const conds: string[]  = [];
   const vals:  unknown[] = [];
-  if (f.titleContains)    { conds.push(`${p}title LIKE ?`);          vals.push(likePattern(f.titleContains)); }
-  if (f.artistContains)   { conds.push(`${p}artist LIKE ?`);         vals.push(likePattern(f.artistContains)); }
-  if (f.genre)            { conds.push(`${p}genre LIKE ?`);          vals.push(likePattern(f.genre)); }
+  // Adds a LIKE clause, but SKIPS pure-wildcard/empty values (e.g. just "*") so a
+  // meaningless filter never turns into "match the entire table".
+  const likeOrSkip = (col: string, value: string) => {
+    const pat = likePattern(value);
+    if (pat === '%') return;
+    conds.push(`${p}${col} LIKE ? ESCAPE '\\'`);
+    vals.push(pat);
+  };
+  if (f.titleContains)    likeOrSkip('title',          f.titleContains);
+  if (f.artistContains)   likeOrSkip('artist',         f.artistContains);
+  if (f.genre)            likeOrSkip('genre',          f.genre);
   if (f.yearFrom != null) { conds.push(`${p}release_year >= ?`);     vals.push(f.yearFrom); }
   if (f.yearTo   != null) { conds.push(`${p}release_year <= ?`);     vals.push(f.yearTo); }
   if (f.releaseType)      { conds.push(`${p}release_type = ?`);      vals.push(f.releaseType); }
-  if (f.label)            { conds.push(`${p}label LIKE ?`);          vals.push(likePattern(f.label)); }
+  if (f.label)            likeOrSkip('label',          f.label);
   if (f.artistType)       { conds.push(`${p}artist_type = ?`);       vals.push(f.artistType); }
   if (f.artistGender)     { conds.push(`${p}artist_gender = ?`);     vals.push(f.artistGender); }
-  if (f.artistCountry)    { conds.push(`${p}artist_country LIKE ?`); vals.push(likePattern(f.artistCountry)); }
+  if (f.artistCountry)    likeOrSkip('artist_country', f.artistCountry);
   if (f.language)         { conds.push(`${p}language LIKE ?`);       vals.push(`%${f.language}%`); }
   if (f.bpmMin != null)   { conds.push(`${p}bpm >= ?`);              vals.push(f.bpmMin); }
   if (f.bpmMax != null)   { conds.push(`${p}bpm <= ?`);              vals.push(f.bpmMax); }
@@ -418,22 +429,29 @@ export default {
 
     if (url.pathname !== '/search') return json({ error: 'Not found' }, 404);
 
-    const q         = url.searchParams.get('q') ?? '';
+    // Generous length caps — only stop abusive/garbage payloads, never a real search.
+    // (No real song title/artist/query approaches these limits.)
+    const cap = (s: string | null, n: number): string | undefined => {
+      if (!s) return undefined;
+      return s.length > n ? s.slice(0, n) : s;
+    };
+
+    const q         = (cap(url.searchParams.get('q'), 200) ?? '');
     const tolerance = parseInt(url.searchParams.get('tolerance') ?? '0', 10) || 0;
 
-    const titleContains  = url.searchParams.get('title')          || undefined;
-    const artistContains = url.searchParams.get('artist')         || undefined;
-    const genre          = url.searchParams.get('genre')          || undefined;
+    const titleContains  = cap(url.searchParams.get('title'),          120);
+    const artistContains = cap(url.searchParams.get('artist'),         120);
+    const genre          = cap(url.searchParams.get('genre'),          120);
     const yearFromRaw    = url.searchParams.get('year_from');
     const yearToRaw      = url.searchParams.get('year_to');
     const yearFrom       = yearFromRaw ? parseInt(yearFromRaw, 10) : undefined;
     const yearTo         = yearToRaw   ? parseInt(yearToRaw,   10) : undefined;
     const releaseType    = url.searchParams.get('release_type')   || undefined;
-    const label          = url.searchParams.get('label')          || undefined;
+    const label          = cap(url.searchParams.get('label'),          120);
     const artistType     = url.searchParams.get('artist_type')    || undefined;
     const artistGender   = url.searchParams.get('artist_gender')  || undefined;
-    const artistCountry  = url.searchParams.get('artist_country') || undefined;
-    const language       = url.searchParams.get('language')       || undefined;
+    const artistCountry  = cap(url.searchParams.get('artist_country'), 120);
+    const language       = cap(url.searchParams.get('language'),       12);
     const bpmMinRaw      = url.searchParams.get('bpm_min');
     const bpmMaxRaw      = url.searchParams.get('bpm_max');
     const bpmMin         = bpmMinRaw ? parseFloat(bpmMinRaw) : undefined;
@@ -494,11 +512,11 @@ export default {
     // Wildcard pattern from main search box (e.g. con* → title/artist LIKE 'con%_')
     const wcPat    = parsed.wildcardToken ? likePattern(parsed.wildcardToken) : null;
     const hasWc    = !!wcPat;
-    const wcFts    = hasWc ? { sql: ` AND (t.title LIKE ? OR t.artist LIKE ?)`,   params: [wcPat, wcPat] as unknown[] } : { sql: '', params: [] as unknown[] };
-    const wcDir    = hasWc ? { sql: ` AND (title LIKE ? OR artist LIKE ?)`,        params: [wcPat, wcPat] as unknown[] } : { sql: '', params: [] as unknown[] };
+    const wcFts    = hasWc ? { sql: ` AND (t.title LIKE ? ESCAPE '\\' OR t.artist LIKE ? ESCAPE '\\')`, params: [wcPat, wcPat] as unknown[] } : { sql: '', params: [] as unknown[] };
+    const wcDir    = hasWc ? { sql: ` AND (title LIKE ? ESCAPE '\\' OR artist LIKE ? ESCAPE '\\')`,      params: [wcPat, wcPat] as unknown[] } : { sql: '', params: [] as unknown[] };
     // Artists mode: wildcard applies to artist column only
-    const wcArtFts = hasWc ? { sql: ` AND t.artist LIKE ?`, params: [wcPat] as unknown[] } : { sql: '', params: [] as unknown[] };
-    const wcArtDir = hasWc ? { sql: ` AND artist LIKE ?`,   params: [wcPat] as unknown[] } : { sql: '', params: [] as unknown[] };
+    const wcArtFts = hasWc ? { sql: ` AND t.artist LIKE ? ESCAPE '\\'`, params: [wcPat] as unknown[] } : { sql: '', params: [] as unknown[] };
+    const wcArtDir = hasWc ? { sql: ` AND artist LIKE ? ESCAPE '\\'`,   params: [wcPat] as unknown[] } : { sql: '', params: [] as unknown[] };
 
     if (!hasKeywords && !hasWc && parsed.exactDuration == null && parsed.minDuration == null && parsed.maxDuration == null && !hasFilters) {
       return json({ tracks: [], total: 0, page, perPage, hasMore: false });
