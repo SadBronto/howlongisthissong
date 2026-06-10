@@ -326,9 +326,10 @@ export default function SearchPage() {
     setError(null);
 
     try {
-      const base = process.env.NEXT_PUBLIC_WORKER_URL
-        ? `${process.env.NEXT_PUBLIC_WORKER_URL}/search`
-        : '/api/search';
+      // Search is served by the Cloudflare Worker (D1). NEXT_PUBLIC_WORKER_URL is
+      // required in production; without it the request fails clearly rather than
+      // silently falling back to the retired Supabase backend.
+      const base = `${process.env.NEXT_PUBLIC_WORKER_URL ?? ''}/search`;
 
       const params = new URLSearchParams();
       if (q.trim())           params.set('q',            q.trim());
