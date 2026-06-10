@@ -58,24 +58,31 @@ interface TrackRow {
   [key: string]:      unknown;
 }
 
-async function enrichGenre(tracks: TrackRow[], env: Env): Promise<void> {
-  const needs = tracks.filter(t => t.mb_id && t.genre == null).slice(0, 5);
-  for (const track of needs) {
-    await new Promise(r => setTimeout(r, 1100));
+// Genre enrichment runs in the cron (not on live search), so MusicBrainz's
+// 1-request-per-second limit can never be violated by concurrent searches —
+// the cron is a single serial invocation.
+const GENRE_CRON_BATCH = 3;
+
+async function enrichGenreCron(env: Env): Promise<void> {
+  const res = await env.DB.prepare(
+    `SELECT id, mb_id FROM tracks WHERE genre IS NULL AND mb_id IS NOT NULL LIMIT ${GENRE_CRON_BATCH}`
+  ).all();
+  const rows = (res.results ?? []) as { id: number; mb_id: string }[];
+  for (let i = 0; i < rows.length; i++) {
+    if (i > 0) await new Promise(r => setTimeout(r, 1100)); // MB: 1 req/sec
     try {
-      const res = await fetch(
-        `https://musicbrainz.org/ws/2/recording/${track.mb_id}?inc=tags&fmt=json`,
-        { headers: { 'User-Agent': MB_USER_AGENT } }
+      const r = await fetch(
+        `https://musicbrainz.org/ws/2/recording/${rows[i].mb_id}?inc=tags&fmt=json`,
+        { headers: { 'User-Agent': MB_USER_AGENT }, signal: AbortSignal.timeout(8000) },
       );
-      if (res.ok) {
-        const data = await res.json() as { tags?: Array<{ count: number; name: string }> };
+      if (r.ok) {
+        const data = await r.json() as { tags?: Array<{ count: number; name: string }> };
         const topTag = (data.tags ?? [])
           .sort((a, b) => b.count - a.count)
           .find(t => t.count > 0)?.name ?? null;
         if (topTag) {
-          track.genre = topTag;
-          await env.DB.prepare('UPDATE tracks SET genre = ? WHERE mb_id = ?')
-            .bind(topTag, track.mb_id).run();
+          await env.DB.prepare('UPDATE tracks SET genre = ? WHERE id = ?')
+            .bind(topTag, rows[i].id).run();
         }
       }
     } catch { /* best-effort */ }
@@ -748,7 +755,8 @@ export default {
         }
       }
 
-      ctx.waitUntil(enrichGenre(tracks, env));
+      // Genre enrichment intentionally NOT done here — it runs in the cron to avoid
+      // tripping MusicBrainz's rate limit when many people search at once.
 
       return json({
         tracks,
@@ -780,5 +788,6 @@ export default {
 
   async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
     ctx.waitUntil(enrichPopularityCron(env));
+    ctx.waitUntil(enrichGenreCron(env));   // MusicBrainz genre fill-in, serial & rate-safe
   },
 };
