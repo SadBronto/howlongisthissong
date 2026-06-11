@@ -3,6 +3,7 @@ import { parseQuery, exactDurationRange, sanitizeForFts } from './queryParser';
 export interface Env {
   DB:              D1Database;
   LASTFM_API_KEY:  string;
+  RATE_LIMITER:    { limit: (opts: { key: string }) => Promise<{ success: boolean }> };
 }
 
 const CORS_HEADERS = {
@@ -408,6 +409,13 @@ export default {
 
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     if (request.method === 'OPTIONS') return new Response(null, { headers: CORS_HEADERS });
+
+    // Per-IP rate limit — generous cap (100/min); only scripted abuse trips it.
+    const clientIp = request.headers.get('CF-Connecting-IP') ?? 'anon';
+    const { success: underLimit } = await env.RATE_LIMITER.limit({ key: clientIp });
+    if (!underLimit) {
+      return json({ error: 'Too many requests — please slow down a moment.' }, 429);
+    }
 
     const url = new URL(request.url);
 
