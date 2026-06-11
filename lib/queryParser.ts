@@ -118,3 +118,15 @@ export function parseQuery(input: string): ParsedQuery {
 
   return result;
 }
+
+/** Quote each word so the FTS5 MATCH treats them as literal terms (ANDed together),
+ *  stripping characters that are FTS operators. Used by the search worker. */
+export function sanitizeForFts(input: string): string {
+  return input
+    .replace(/["""*()\[\]^~]/g, ' ')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .map(w => `"${w.replace(/"/g, '')}"`)
+    .join(' ');
+}

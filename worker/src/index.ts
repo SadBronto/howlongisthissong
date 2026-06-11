@@ -1,4 +1,5 @@
-import { parseQuery, exactDurationRange, sanitizeForFts } from './queryParser';
+// Canonical parser shared with the Next app (single source of truth).
+import { parseQuery, exactDurationRange, sanitizeForFts } from '../../lib/queryParser';
 
 export interface Env {
   DB:              D1Database;
