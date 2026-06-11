@@ -429,6 +429,25 @@ export default {
 
     if (url.pathname !== '/search') return json({ error: 'Not found' }, 404);
 
+    // ── Edge cache ────────────────────────────────────────────────────────────
+    // Identical searches within the TTL are served instantly from the per-colo cache
+    // instead of re-running the query. The first search of each query+page still runs
+    // (and does its search-count / queue-priority tracking); only redundant repeats are
+    // served from cache, so no result ever loses its tracking.
+    const cache    = caches.default;
+    const cacheKey = new Request(url.toString());
+    const cacheHit = await cache.match(cacheKey);
+    if (cacheHit) return cacheHit;
+
+    const cacheJson = (data: unknown): Response => {
+      const resp = new Response(JSON.stringify(data), {
+        status:  200,
+        headers: { ...CORS_HEADERS, 'Cache-Control': 'public, max-age=300' },
+      });
+      ctx.waitUntil(cache.put(cacheKey, resp.clone()));
+      return resp;
+    };
+
     // Generous length caps — only stop abusive/garbage payloads, never a real search.
     // (No real song title/artist/query approaches these limits.)
     const cap = (s: string | null, n: number): string | undefined => {
@@ -655,7 +674,7 @@ export default {
         const totalCapped = rawCount > 10000;
         const total       = Math.min(rawCount, 10000);
 
-        return json({ artists, total, totalCapped, page, perPage, hasMore, mode: 'artists' });
+        return cacheJson({ artists, total, totalCapped, page, perPage, hasMore, mode: 'artists' });
       } catch (err) {
         console.error('Artists search error:', err);
         return json({ error: 'Search failed' }, 500);
@@ -776,7 +795,7 @@ export default {
       // Genre enrichment intentionally NOT done here — it runs in the cron to avoid
       // tripping MusicBrainz's rate limit when many people search at once.
 
-      return json({
+      return cacheJson({
         tracks,
         total,
         totalCapped,
