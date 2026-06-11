@@ -195,6 +195,45 @@ function buildOrderBy(sort: string, fts: boolean): string {
     : `ORDER BY ${scoreExpr} DESC, duration_ms`;
 }
 
+// ── Version grouping (keyword searches) ────────────────────────────────────────
+// Within a (title, artist) group, pick the headline: most popular, with a boost for
+// the untagged studio version (`version` is the disambiguation alias) so it wins when
+// scores are close. Columns are unprefixed (they come from the capped subquery).
+const HEADLINE_RANK_GROUPED =
+  `(COALESCE(popularity, 0) + CASE WHEN version IS NULL OR version = '' THEN 8 ELSE 0 END) DESC, duration_ms`;
+
+const GROUP_SCORE = `CASE WHEN popularity > 0 THEN popularity ELSE MIN(CAST(search_count * 10 AS INTEGER), 30) END`;
+
+// Order the de-duplicated headline rows. bm25 (title-weighted relevance) is carried up
+// as the _bm column from the innermost MATCH query, where it's allowed.
+function buildGroupedOrderBy(sort: string): string {
+  if (sort === 'asc')  return `ORDER BY duration_ms ASC`;
+  if (sort === 'desc') return `ORDER BY duration_ms DESC`;
+  return `ORDER BY ${GROUP_SCORE} DESC, _bm`;
+}
+
+/** Wrap an FTS keyword query so each song (title+artist) returns ONE headline row plus
+ *  a version_count. Three levels: (1) FTS match capped to the top-N rows by relevance
+ *  — keeps broad searches fast, since windowing the whole match set is too slow;
+ *  (2) window functions pick the headline + count per group; (3) keep headlines only. */
+function groupedFtsQuery(whereClause: string): string {
+  const innerScore = `CASE WHEN t.popularity > 0 THEN t.popularity ELSE MIN(CAST(t.search_count * 10 AS INTEGER), 30) END`;
+  return `
+    SELECT * FROM (
+      SELECT *,
+        ROW_NUMBER() OVER (PARTITION BY lower(title), lower(artist) ORDER BY ${HEADLINE_RANK_GROUPED}) AS _rn,
+        COUNT(*) OVER (PARTITION BY lower(title), lower(artist)) AS version_count
+      FROM (
+        SELECT ${JOINED_COLS}, bm25(tracks_fts, 10.0, 4.0, 1.0) AS _bm
+        FROM tracks_fts JOIN tracks t ON t.id = tracks_fts.rowid
+        WHERE ${whereClause}
+        ORDER BY ${innerScore} DESC
+        LIMIT 4000
+      )
+    ) WHERE _rn = 1
+  `;
+}
+
 function buildDurationClause(alias: string, minDuration: number | null, maxDuration: number | null): { sql: string; params: unknown[] } {
   const p = alias ? `${alias}.` : '';
   if (minDuration != null && maxDuration != null) {
@@ -514,6 +553,9 @@ export default {
     const sort       = ['relevance', 'asc', 'desc'].includes(sortRaw) ? sortRaw : 'relevance';
     const offset     = (page - 1) * perPage;
     const artistsMode = url.searchParams.get('mode') === 'artists';
+    // Group versions of the same song (keyword searches only). Opt-in via group=1 so
+    // the worker stays flat for clients that don't render the "N more versions" UI yet.
+    const grouped     = url.searchParams.get('group') === '1';
 
     const parsed = parseQuery(q);
 
@@ -699,32 +741,26 @@ export default {
 
       if (hasKeywords && hasDuration) {
         const dur = buildDurationClause('t', minDuration, maxDuration);
-        dataStmt = env.DB.prepare(`
-          SELECT ${JOINED_COLS}
-          FROM tracks_fts JOIN tracks t ON t.id = tracks_fts.rowid
-          WHERE tracks_fts MATCH ? AND ${dur.sql}${fts.sql}${wcFts.sql}
-          ${obF} LIMIT ${perPage + 1} OFFSET ${offset}
-        `).bind(effectiveFts, ...dur.params, ...fts.params, ...wcFts.params);
-        countStmt = env.DB.prepare(`
-          SELECT COUNT(*) as n FROM (
-            SELECT 1 FROM tracks_fts JOIN tracks t ON t.id = tracks_fts.rowid
-            WHERE tracks_fts MATCH ? AND ${dur.sql}${fts.sql}${wcFts.sql} LIMIT 10001
-          )
-        `).bind(effectiveFts, ...dur.params, ...fts.params, ...wcFts.params);
+        const wh  = `tracks_fts MATCH ? AND ${dur.sql}${fts.sql}${wcFts.sql}`;
+        const ps  = [effectiveFts, ...dur.params, ...fts.params, ...wcFts.params];
+        if (grouped) {
+          dataStmt  = env.DB.prepare(`${groupedFtsQuery(wh)} ${buildGroupedOrderBy(sort)} LIMIT ${perPage + 1} OFFSET ${offset}`).bind(...ps);
+          countStmt = env.DB.prepare(`SELECT COUNT(*) as n FROM (SELECT 1 FROM tracks_fts JOIN tracks t ON t.id = tracks_fts.rowid WHERE ${wh} GROUP BY lower(t.title), lower(t.artist) LIMIT 10001)`).bind(...ps);
+        } else {
+          dataStmt  = env.DB.prepare(`SELECT ${JOINED_COLS} FROM tracks_fts JOIN tracks t ON t.id = tracks_fts.rowid WHERE ${wh} ${obF} LIMIT ${perPage + 1} OFFSET ${offset}`).bind(...ps);
+          countStmt = env.DB.prepare(`SELECT COUNT(*) as n FROM (SELECT 1 FROM tracks_fts JOIN tracks t ON t.id = tracks_fts.rowid WHERE ${wh} LIMIT 10001)`).bind(...ps);
+        }
 
       } else if (hasKeywords) {
-        dataStmt = env.DB.prepare(`
-          SELECT ${JOINED_COLS}
-          FROM tracks_fts JOIN tracks t ON t.id = tracks_fts.rowid
-          WHERE tracks_fts MATCH ?${fts.sql}${wcFts.sql}
-          ${obF} LIMIT ${perPage + 1} OFFSET ${offset}
-        `).bind(effectiveFts, ...fts.params, ...wcFts.params);
-        countStmt = env.DB.prepare(`
-          SELECT COUNT(*) as n FROM (
-            SELECT 1 FROM tracks_fts JOIN tracks t ON t.id = tracks_fts.rowid
-            WHERE tracks_fts MATCH ?${fts.sql}${wcFts.sql} LIMIT 10001
-          )
-        `).bind(effectiveFts, ...fts.params, ...wcFts.params);
+        const wh = `tracks_fts MATCH ?${fts.sql}${wcFts.sql}`;
+        const ps = [effectiveFts, ...fts.params, ...wcFts.params];
+        if (grouped) {
+          dataStmt  = env.DB.prepare(`${groupedFtsQuery(wh)} ${buildGroupedOrderBy(sort)} LIMIT ${perPage + 1} OFFSET ${offset}`).bind(...ps);
+          countStmt = env.DB.prepare(`SELECT COUNT(*) as n FROM (SELECT 1 FROM tracks_fts JOIN tracks t ON t.id = tracks_fts.rowid WHERE ${wh} GROUP BY lower(t.title), lower(t.artist) LIMIT 10001)`).bind(...ps);
+        } else {
+          dataStmt  = env.DB.prepare(`SELECT ${JOINED_COLS} FROM tracks_fts JOIN tracks t ON t.id = tracks_fts.rowid WHERE ${wh} ${obF} LIMIT ${perPage + 1} OFFSET ${offset}`).bind(...ps);
+          countStmt = env.DB.prepare(`SELECT COUNT(*) as n FROM (SELECT 1 FROM tracks_fts JOIN tracks t ON t.id = tracks_fts.rowid WHERE ${wh} LIMIT 10001)`).bind(...ps);
+        }
 
       } else if (hasDuration) {
         const dur = buildDurationClause('', minDuration, maxDuration);
