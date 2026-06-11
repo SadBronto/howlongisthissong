@@ -1,3 +1,6 @@
+'use client';
+
+import { useState } from 'react';
 import type { Track } from '@/lib/types';
 import { formatDuration } from '@/lib/queryParser';
 
@@ -22,6 +25,20 @@ export default function TrackCard({ track, exactDuration, tolerance = 0 }: Track
       ? track.duration_ms >= exactDuration - tolerance &&
         track.duration_ms <= exactDuration + 999 + tolerance
       : false;
+
+  // Audio chips: hover shows the explanation on desktop; tapping shows it on mobile
+  // (where there's no hover) via the caption below the chip row.
+  const [info, setInfo] = useState<string | null>(null);
+  const audioChip = (text: string, explain: string) => (
+    <button
+      type="button"
+      title={explain}
+      onClick={() => setInfo(prev => (prev === explain ? null : explain))}
+      className="text-xs text-indigo-500 bg-indigo-50 hover:bg-indigo-100 px-1.5 py-0.5 rounded-full flex-shrink-0 transition-colors cursor-help"
+    >
+      {text}
+    </button>
+  );
 
   return (
     <div className="flex items-center gap-3 sm:gap-4 py-3 px-3 rounded-lg hover:bg-gray-50 transition-colors">
@@ -81,46 +98,25 @@ export default function TrackCard({ track, exactDuration, tolerance = 0 }: Track
           ))}
         </div>
 
-        {/* AcousticBrainz audio properties */}
+        {/* AcousticBrainz audio properties — tap a chip (or hover) for what it means */}
         {(track.bpm != null || track.key_key != null || track.loudness != null ||
           track.danceability != null || track.tuning_freq != null || track.dynamic_complexity != null) && (
-          <div className="flex items-center gap-1 mt-1 flex-wrap">
-            {track.bpm != null && (
-              <span title="Tempo in beats per minute (algorithmically detected)"
-                className="text-xs text-indigo-500 bg-indigo-50 px-1.5 py-0.5 rounded-full flex-shrink-0 cursor-help">
-                {Math.round(track.bpm)} BPM
-              </span>
-            )}
-            {track.key_key != null && track.key_scale != null && (
-              <span title={`Musical key: ${track.key_key} ${track.key_scale}`}
-                className="text-xs text-indigo-500 bg-indigo-50 px-1.5 py-0.5 rounded-full flex-shrink-0 cursor-help">
-                {track.key_key} {track.key_scale}
-              </span>
-            )}
-            {track.loudness != null && (
-              <span title={`Integrated loudness: ${track.loudness.toFixed(1)} dB (0 dB = maximum; more negative = quieter)`}
-                className="text-xs text-indigo-500 bg-indigo-50 px-1.5 py-0.5 rounded-full flex-shrink-0 cursor-help">
-                {track.loudness.toFixed(1)} dB
-              </span>
-            )}
-            {track.danceability != null && (
-              <span title={`Danceability: ${Math.round((track.danceability / 3) * 100)}% — how suitable the track is for dancing, based on rhythm stability and beat strength`}
-                className="text-xs text-indigo-500 bg-indigo-50 px-1.5 py-0.5 rounded-full flex-shrink-0 cursor-help">
-                Dance {Math.round((track.danceability / 3) * 100)}%
-              </span>
-            )}
-            {track.tuning_freq != null && (
-              <span title={`Tuning frequency: ${Math.round(track.tuning_freq)} Hz (standard pitch = 440 Hz)`}
-                className="text-xs text-indigo-500 bg-indigo-50 px-1.5 py-0.5 rounded-full flex-shrink-0 cursor-help">
-                {Math.round(track.tuning_freq)} Hz
-              </span>
-            )}
-            {track.dynamic_complexity != null && (
-              <span title={`Dynamic complexity: ${track.dynamic_complexity.toFixed(1)} — average variation in loudness; higher = more dramatic shifts between quiet and loud`}
-                className="text-xs text-indigo-500 bg-indigo-50 px-1.5 py-0.5 rounded-full flex-shrink-0 cursor-help">
-                Dyn {track.dynamic_complexity.toFixed(1)}
-              </span>
-            )}
+          <div className="mt-1">
+            <div className="flex items-center gap-1 flex-wrap">
+              {track.bpm != null &&
+                audioChip(`${Math.round(track.bpm)} BPM`, 'Tempo in beats per minute (algorithmically detected).')}
+              {track.key_key != null && track.key_scale != null &&
+                audioChip(`${track.key_key} ${track.key_scale}`, `Musical key: ${track.key_key} ${track.key_scale}.`)}
+              {track.loudness != null &&
+                audioChip(`${track.loudness.toFixed(1)} dB`, `Integrated loudness: ${track.loudness.toFixed(1)} dB (0 dB = maximum; more negative = quieter).`)}
+              {track.danceability != null &&
+                audioChip(`Dance ${Math.round((track.danceability / 3) * 100)}%`, `Danceability: ${Math.round((track.danceability / 3) * 100)}% — how suitable the track is for dancing, based on rhythm stability and beat strength.`)}
+              {track.tuning_freq != null &&
+                audioChip(`${Math.round(track.tuning_freq)} Hz`, `Tuning frequency: ${Math.round(track.tuning_freq)} Hz (standard pitch = 440 Hz).`)}
+              {track.dynamic_complexity != null &&
+                audioChip(`Dyn ${track.dynamic_complexity.toFixed(1)}`, `Dynamic complexity: ${track.dynamic_complexity.toFixed(1)} — average variation in loudness; higher = more dramatic shifts between quiet and loud.`)}
+            </div>
+            {info && <p className="text-xs text-gray-400 mt-1 leading-snug">{info}</p>}
           </div>
         )}
       </div>

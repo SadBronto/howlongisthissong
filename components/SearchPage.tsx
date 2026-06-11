@@ -8,10 +8,11 @@ import { parseQuery } from '@/lib/queryParser';
 import type { SearchResult } from '@/lib/types';
 
 interface Example {
-  label:    string;            // chip text
-  hint:     string;            // tooltip
-  query?:   string;            // typed into the main box (defaults to label)
-  filters?: Partial<Filters>;  // advanced filters applied on click
+  label:     string;            // chip text
+  hint:      string;            // tooltip
+  query?:    string;            // typed into the main box (defaults to label)
+  filters?:  Partial<Filters>;  // advanced filters applied on click
+  featured?: boolean;           // rendered as the big standout "wild" example
 }
 
 const EXAMPLES: Example[] = [
@@ -23,10 +24,11 @@ const EXAMPLES: Example[] = [
   { label: 'con*',                  hint: 'starts with' },
   { label: 'pink floyd',            hint: 'by artist' },
   {
-    label:   'rock songs from the 2000s between 100 and 200 BPM that are under 3 minutes and have “duck” in the title',
-    hint:    'A keyword + filters combo — runs through the fast text index',
-    query:   'duck <3:00',
-    filters: { genre: 'rock', yearFrom: '2000', yearTo: '2009', bpmMin: '100', bpmMax: '200' },
+    label:    'rock songs from the 2000s between 100 and 200 BPM that are under 3 minutes and have “duck” in the title',
+    hint:     'A keyword + filters combo — runs through the fast text index',
+    query:    'duck <3:00',
+    filters:  { genre: 'rock', yearFrom: '2000', yearTo: '2009', bpmMin: '100', bpmMax: '200' },
+    featured: true,
   },
 ];
 
@@ -392,6 +394,7 @@ export default function SearchPage() {
     const f: Filters = { ...EMPTY_FILTERS, ...(ex.filters ?? {}) };
     setQuery(q);
     setFilters(f);
+    setArtistsMode(false);   // examples are normal-mode searches
     setResults(null);
     setTolerance(0);
     setPage(1);
@@ -672,7 +675,7 @@ export default function SearchPage() {
               <div className="mt-2 p-4 bg-gray-50 rounded-xl border border-gray-200 space-y-4">
 
                 {/* Title + Artist */}
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
                     <label className="text-xs font-medium text-gray-500 mb-1 block">Title</label>
                     <input value={advTitle} onChange={e => setAdvTitle(e.target.value)}
@@ -688,7 +691,7 @@ export default function SearchPage() {
                 </div>
 
                 {/* Genre + Label */}
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
                     <label className="text-xs font-medium text-gray-500 mb-1 block">Genre</label>
                     <input value={advGenre} onChange={e => setAdvGenre(e.target.value)}
@@ -704,7 +707,7 @@ export default function SearchPage() {
                 </div>
 
                 {/* Artist type + Gender */}
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
                     <label className="text-xs font-medium text-gray-500 mb-1 block">Artist type</label>
                     <select value={advArtistType} onChange={e => setAdvArtistType(e.target.value)}
@@ -730,7 +733,7 @@ export default function SearchPage() {
                 </div>
 
                 {/* Country + Language */}
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
                     <label className="text-xs font-medium text-gray-500 mb-1 block">Artist country</label>
                     <input value={advArtistCountry} onChange={e => setAdvArtistCountry(e.target.value)}
@@ -882,7 +885,7 @@ export default function SearchPage() {
                 </div>
 
                 {/* Name length (number of characters) */}
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
                     <label className="text-xs font-medium text-gray-500 mb-1 block">Title length</label>
                     <div className="flex items-center gap-2">
@@ -1029,10 +1032,20 @@ export default function SearchPage() {
 
         {/* Example chips — only on homepage */}
         {!hasQuery && !hasFilters && (
-          <div className="flex flex-wrap gap-2 mt-4 px-4 justify-center max-w-xl">
-            {EXAMPLES.map((ex) => (
+          <div className="mt-4 px-4 w-full flex flex-col items-center">
+            <div className="flex flex-wrap gap-2 justify-center max-w-xl">
+              {EXAMPLES.filter(ex => !ex.featured).map((ex) => (
+                <button key={ex.label} onClick={() => handleExampleClick(ex)} title={ex.hint}
+                  className="text-xs bg-gray-100 hover:bg-blue-50 hover:text-blue-700 text-gray-500 px-3 py-1.5 rounded-full transition-colors font-mono">
+                  {ex.label}
+                </button>
+              ))}
+            </div>
+            {/* The big standout "wild" example */}
+            {EXAMPLES.filter(ex => ex.featured).map((ex) => (
               <button key={ex.label} onClick={() => handleExampleClick(ex)} title={ex.hint}
-                className="text-xs bg-gray-100 hover:bg-blue-50 hover:text-blue-700 text-gray-500 px-3 py-1.5 rounded-full transition-colors font-mono">
+                className="mt-3 w-full max-w-xl text-left text-xs sm:text-sm bg-gradient-to-r from-blue-50 to-indigo-50 hover:from-blue-100 hover:to-indigo-100 border border-blue-200 text-blue-800 px-4 py-2.5 rounded-xl transition-colors">
+                <span className="font-semibold text-blue-600 whitespace-nowrap">Try a wild one&nbsp;→</span>{' '}
                 {ex.label}
               </button>
             ))}
