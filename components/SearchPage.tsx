@@ -1209,6 +1209,8 @@ export default function SearchPage() {
       )}
 
       <footer className="text-center text-xs text-gray-300 py-4 border-t border-gray-100">
+        <a href="/help" className="text-gray-400 hover:text-blue-500 underline transition-colors">Search guide</a>
+        <span className="mx-2">·</span>
         Track data from{' '}
         <a href="https://musicbrainz.org" target="_blank" rel="noopener noreferrer"
           className="underline hover:text-gray-500 transition-colors">MusicBrainz</a>
