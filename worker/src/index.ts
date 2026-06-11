@@ -584,20 +584,18 @@ export default {
         const hasArtistFts   = !!artistFtsTerm;
 
         // Exclude collaboration/credit strings — standalone band names only
+        // Only UNAMBIGUOUS collaboration join-phrases are excluded, so real band
+        // names containing "&", "," or "/" (Earth, Wind & Fire / Simon & Garfunkel /
+        // Crosby, Stills & Nash / AC/DC) are no longer hidden. Genuine ad-hoc "X & Y"
+        // collabs will now appear as artists — intentional (we're reintroducing them).
         const collabPatterns = [
-          `NOT LIKE '%feat%'`,        // feat. / featuring
-          `NOT LIKE '%&%'`,           // & (with or without spaces)
-          `NOT LIKE '% of %'`,        // "Glenn Hughes of Deep Purple"
-          `NOT LIKE '%, %'`,          // comma-separated credits
-          `NOT LIKE '% with %'`,      // "with" separator
-          `NOT LIKE '% vs %'`,        // "vs" separator
+          `NOT LIKE '% feat%'`,       // " feat." / featuring (leading space avoids e.g. "Defeater")
           `NOT LIKE '% ft. %'`,       // alternate feat.
           `NOT LIKE '% ft %'`,        // alternate feat. (no period)
-          `NOT LIKE '% x %'`,         // "x" collab separator
-          `NOT LIKE '% / %'`,         // slash separator
+          `NOT LIKE '% vs %'`,        // "vs" / versus
           `NOT LIKE '% presents %'`,  // "Artist presents Other"
           `NOT LIKE '% pres. %'`,     // abbreviated presents
-          `NOT LIKE '%;%'`,           // semicolon separator
+          `NOT LIKE '%;%'`,           // semicolon separates multiple distinct artists
           // NOTE: "and" / "und" intentionally excluded — too many real band names
           // contain "and" (Of Monsters and Men, Simon and Garfunkel, etc.)
         ];
