@@ -6,6 +6,8 @@
 export interface Filters {
   titleContains:  string;
   artistContains: string;
+  titleMode:      string;   // '' = contains (default) | 'startswith'
+  artistMode:     string;   // '' = contains (default) | 'startswith'
   genre:          string;
   yearFrom:       string;
   yearTo:         string;
@@ -25,6 +27,7 @@ export interface Filters {
 
 export const EMPTY_FILTERS: Filters = {
   titleContains: '', artistContains: '',
+  titleMode: '', artistMode: '',
   genre: '', yearFrom: '', yearTo: '', releaseType: '', label: '',
   artistType: '', artistGender: '', artistCountry: '', language: '',
   bpmMin: '', bpmMax: '',
@@ -35,6 +38,8 @@ export function filtersFromParams(sp: URLSearchParams): Filters {
   return {
     titleContains:  sp.get('title')          ?? '',
     artistContains: sp.get('artist')         ?? '',
+    titleMode:      sp.get('title_mode')     ?? '',
+    artistMode:     sp.get('artist_mode')    ?? '',
     genre:          sp.get('genre')          ?? '',
     yearFrom:       sp.get('year_from')      ?? '',
     yearTo:         sp.get('year_to')        ?? '',
@@ -59,6 +64,8 @@ export function buildUrl(q: string, f: Filters, pg: number, pp: number, s: strin
   if (am)               p.set('mode',          'artists');
   if (f.titleContains)  p.set('title',          f.titleContains);
   if (f.artistContains) p.set('artist',         f.artistContains);
+  if (f.titleContains  && f.titleMode  === 'startswith') p.set('title_mode',  'startswith');
+  if (f.artistContains && f.artistMode === 'startswith') p.set('artist_mode', 'startswith');
   if (f.genre)          p.set('genre',          f.genre);
   if (f.yearFrom)       p.set('year_from',      f.yearFrom);
   if (f.yearTo)         p.set('year_to',        f.yearTo);

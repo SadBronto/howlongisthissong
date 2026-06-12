@@ -93,8 +93,10 @@ export default function SearchPage() {
   // ── Advanced form state ────────────────────────────────────────────────────
   const [advExpanded, setAdvExpanded] = useState(false);
   const [advSummary,  setAdvSummary]  = useState<string[]>([]);
-  const [advTitle,    setAdvTitle]    = useState('');
-  const [advArtist,   setAdvArtist]   = useState('');
+  const [advTitle,     setAdvTitle]     = useState('');
+  const [advArtist,    setAdvArtist]    = useState('');
+  const [advTitleMode, setAdvTitleMode] = useState('');   // '' = contains | 'startswith'
+  const [advArtistMode,setAdvArtistMode]= useState('');
   const [advDurMode,  setAdvDurMode]  = useState<DurationMode>('exact');
   const [advExact,    setAdvExact]    = useState('');
   const [advFrom,     setAdvFrom]     = useState('');
@@ -159,6 +161,8 @@ export default function SearchPage() {
       if (tol > 0)            params.set('tolerance',     String(tol));
       if (f.titleContains)    params.set('title',          f.titleContains);
       if (f.artistContains)   params.set('artist',         f.artistContains);
+      if (f.titleContains  && f.titleMode  === 'startswith') params.set('title_mode',  'startswith');
+      if (f.artistContains && f.artistMode === 'startswith') params.set('artist_mode', 'startswith');
       if (f.genre)            params.set('genre',          f.genre);
       if (f.yearFrom)         params.set('year_from',      f.yearFrom);
       if (f.yearTo)           params.set('year_to',        f.yearTo);
@@ -298,6 +302,8 @@ export default function SearchPage() {
     const newFilters: Filters = {
       titleContains:  advTitle.trim(),
       artistContains: advArtist.trim(),
+      titleMode:      advTitleMode,
+      artistMode:     advArtistMode,
       genre:          advGenre,
       yearFrom:       advYearFrom,
       yearTo:         advYearTo,
@@ -328,7 +334,7 @@ export default function SearchPage() {
     const durActive = advDurMode === 'exact' ? advExact : `${advFrom}${advTo}`;
     setAdvSummary(summaryFromFilters(newFilters, durActive, '', ''));
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [advTitle, advArtist, advDurMode, advExact, advFrom, advTo,
+  }, [advTitle, advArtist, advTitleMode, advArtistMode, advDurMode, advExact, advFrom, advTo,
       advGenre, advYearFrom, advYearTo, advRelType, advLabel,
       advArtistType, advArtistGender, advArtistCountry, advLanguage,
       advBpmMin, advBpmMax,
@@ -361,6 +367,8 @@ export default function SearchPage() {
     if (advExpanded) {
       setAdvTitle(filters.titleContains);
       setAdvArtist(filters.artistContains);
+      setAdvTitleMode(filters.titleMode);
+      setAdvArtistMode(filters.artistMode);
       setAdvGenre(filters.genre);
       setAdvYearFrom(filters.yearFrom);
       setAdvYearTo(filters.yearTo);
@@ -499,19 +507,35 @@ export default function SearchPage() {
             {advExpanded && (
               <div className="mt-2 p-4 bg-gray-50 rounded-xl border border-gray-200 space-y-4">
 
-                {/* Title + Artist */}
+                {/* Title + Artist (each with a Contains / Starts-with mode) */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
-                    <label className="text-xs font-medium text-gray-500 mb-1 block">Title</label>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-xs font-medium text-gray-500">Title</label>
+                      <select value={advTitleMode} onChange={e => setAdvTitleMode(e.target.value)}
+                        className="text-xs text-gray-500 bg-white border border-gray-200 rounded px-1.5 py-0.5 focus:outline-none focus:border-blue-400 cursor-pointer">
+                        <option value="">Contains</option>
+                        <option value="startswith">Starts with</option>
+                      </select>
+                    </div>
                     <input value={advTitle} onChange={e => setAdvTitle(e.target.value)}
                       onKeyDown={e => { if (e.key === 'Enter') handleAdvancedSubmit(); }}
-                      placeholder="Bohemian* or *rhapsody" className={ADV_INPUT} />
+                      placeholder={advTitleMode === 'startswith' ? 'Title begins with…' : 'Bohemian* or *rhapsody'}
+                      className={ADV_INPUT} />
                   </div>
                   <div>
-                    <label className="text-xs font-medium text-gray-500 mb-1 block">Artist</label>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-xs font-medium text-gray-500">Artist</label>
+                      <select value={advArtistMode} onChange={e => setAdvArtistMode(e.target.value)}
+                        className="text-xs text-gray-500 bg-white border border-gray-200 rounded px-1.5 py-0.5 focus:outline-none focus:border-blue-400 cursor-pointer">
+                        <option value="">Contains</option>
+                        <option value="startswith">Starts with</option>
+                      </select>
+                    </div>
                     <input value={advArtist} onChange={e => setAdvArtist(e.target.value)}
                       onKeyDown={e => { if (e.key === 'Enter') handleAdvancedSubmit(); }}
-                      placeholder="Queen or *smith*" className={ADV_INPUT} />
+                      placeholder={advArtistMode === 'startswith' ? 'Artist begins with…' : 'Queen or *smith*'}
+                      className={ADV_INPUT} />
                   </div>
                 </div>
 
@@ -758,6 +782,7 @@ export default function SearchPage() {
                         setAdvGenre(''); setAdvYearFrom(''); setAdvYearTo('');
                         setAdvRelType(''); setAdvLabel('');
                         setAdvTitle(''); setAdvArtist('');
+                        setAdvTitleMode(''); setAdvArtistMode('');
                         setAdvExact(''); setAdvFrom(''); setAdvTo('');
                         setAdvArtistType(''); setAdvArtistGender('');
                         setAdvArtistCountry(''); setAdvLanguage('');
@@ -781,10 +806,16 @@ export default function SearchPage() {
         {numActive > 0 && !advExpanded && (
           <div className="flex flex-wrap items-center gap-1.5 mt-2 px-4 max-w-2xl w-full">
             {filters.titleContains && (
-              <FilterChip label={`title: ${filters.titleContains}`} onRemove={() => removeFilter(['titleContains'])} />
+              <FilterChip
+                label={filters.titleMode === 'startswith' ? `title starts with: ${filters.titleContains}` : `title: ${filters.titleContains}`}
+                onRemove={() => removeFilter(['titleContains', 'titleMode'])}
+              />
             )}
             {filters.artistContains && (
-              <FilterChip label={`artist: ${filters.artistContains}`} onRemove={() => removeFilter(['artistContains'])} />
+              <FilterChip
+                label={filters.artistMode === 'startswith' ? `artist starts with: ${filters.artistContains}` : `artist: ${filters.artistContains}`}
+                onRemove={() => removeFilter(['artistContains', 'artistMode'])}
+              />
             )}
             {filters.genre && (
               <FilterChip label={`genre: ${filters.genre}`} onRemove={() => removeFilter(['genre'])} />

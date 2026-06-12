@@ -649,6 +649,25 @@ export default {
     if (titleFold)  delete filtersForLike.titleContains;
     if (artistFold) delete filtersForLike.artistContains;
 
+    // ── Advanced "Starts with" (anchored prefix) — free + fast ─────────────────
+    // The FTS fold above already narrows to rows whose title/artist contain a word
+    // beginning with the typed text. "Starts with" mode adds an anchored
+    // lower(col) LIKE 'value%' on top — but it only runs against those few FTS-matched
+    // rows, so it stays instant and needs NO new index (no D1 writes). We require the
+    // FTS fold to be present so the anchor can never trigger a full-table scan.
+    const titleStartsWith  = url.searchParams.get('title_mode')  === 'startswith';
+    const artistStartsWith = url.searchParams.get('artist_mode') === 'startswith';
+    const buildSwClause = (col: 'title' | 'artist', value: string | undefined, fold: string): { sql: string; params: unknown[] } => {
+      if (!value || !fold) return { sql: '', params: [] };
+      const cleaned = value.toLowerCase().replace(/\*/g, '').trim();
+      if (!cleaned) return { sql: '', params: [] };
+      const core = cleaned.replace(/[\\%_]/g, m => '\\' + m);  // LIKE metachars → literal
+      return { sql: ` AND lower(t.${col}) LIKE ? ESCAPE '\\'`, params: [`${core}%`] };
+    };
+    const swTitle  = titleStartsWith  ? buildSwClause('title',  titleContains,  titleFold)  : { sql: '', params: [] as unknown[] };
+    const swArtist = artistStartsWith ? buildSwClause('artist', artistContains, artistFold) : { sql: '', params: [] as unknown[] };
+    const swFts    = { sql: swTitle.sql + swArtist.sql, params: [...swTitle.params, ...swArtist.params] };
+
     // Wildcard pattern from main search box (e.g. con* → title/artist LIKE 'con%_')
     const wcPat    = parsed.wildcardToken ? likePattern(parsed.wildcardToken) : null;
     const hasWc    = !!wcPat;
@@ -736,20 +755,20 @@ export default {
             SELECT t.artist, MAX(COALESCE(t.popularity, 0)) as max_pop
             FROM tracks_fts JOIN tracks t ON t.id = tracks_fts.rowid
             WHERE tracks_fts MATCH ?${durSql}
-            AND t.artist IS NOT NULL${noCfts}${fts.sql}${wcArtFts.sql}
+            AND t.artist IS NOT NULL${noCfts}${fts.sql}${wcArtFts.sql}${swArtist.sql}
             GROUP BY t.artist
             ${artistObFts}
             LIMIT ${perPage + 1} OFFSET ${offset}
-          `).bind(ftsArtistTerm, ...(dur?.params ?? []), ...fts.params, ...wcArtFts.params);
+          `).bind(ftsArtistTerm, ...(dur?.params ?? []), ...fts.params, ...wcArtFts.params, ...swArtist.params);
 
           countStmt = env.DB.prepare(`
             SELECT COUNT(*) as n FROM (
               SELECT t.artist FROM tracks_fts JOIN tracks t ON t.id = tracks_fts.rowid
               WHERE tracks_fts MATCH ?${durSql}
-              AND t.artist IS NOT NULL${noCfts}${fts.sql}${wcArtFts.sql}
+              AND t.artist IS NOT NULL${noCfts}${fts.sql}${wcArtFts.sql}${swArtist.sql}
               GROUP BY t.artist LIMIT 10001
             )
-          `).bind(ftsArtistTerm, ...(dur?.params ?? []), ...fts.params, ...wcArtFts.params);
+          `).bind(ftsArtistTerm, ...(dur?.params ?? []), ...fts.params, ...wcArtFts.params, ...swArtist.params);
 
         } else if (hasDuration) {
           const dur = buildDurationClause('', minDuration, maxDuration);
@@ -811,8 +830,8 @@ export default {
 
       if (hasKeywords && hasDuration) {
         const dur = buildDurationClause('t', minDuration, maxDuration);
-        const wh  = `tracks_fts MATCH ? AND ${dur.sql}${fts.sql}${wcFts.sql}`;
-        const ps  = [effectiveFts, ...dur.params, ...fts.params, ...wcFts.params];
+        const wh  = `tracks_fts MATCH ? AND ${dur.sql}${fts.sql}${wcFts.sql}${swFts.sql}`;
+        const ps  = [effectiveFts, ...dur.params, ...fts.params, ...wcFts.params, ...swFts.params];
         if (grouped) {
           dataStmt  = env.DB.prepare(`${groupedFtsQuery(wh)} ${buildGroupedOrderBy(sort)} LIMIT ${perPage + 1} OFFSET ${offset}`).bind(...ps);
           countStmt = env.DB.prepare(`SELECT COUNT(*) as n FROM (SELECT 1 FROM tracks_fts JOIN tracks t ON t.id = tracks_fts.rowid WHERE ${wh} GROUP BY lower(t.title), lower(t.artist) LIMIT 10001)`).bind(...ps);
@@ -822,8 +841,8 @@ export default {
         }
 
       } else if (hasKeywords) {
-        const wh = `tracks_fts MATCH ?${fts.sql}${wcFts.sql}`;
-        const ps = [effectiveFts, ...fts.params, ...wcFts.params];
+        const wh = `tracks_fts MATCH ?${fts.sql}${wcFts.sql}${swFts.sql}`;
+        const ps = [effectiveFts, ...fts.params, ...wcFts.params, ...swFts.params];
         if (grouped) {
           dataStmt  = env.DB.prepare(`${groupedFtsQuery(wh)} ${buildGroupedOrderBy(sort)} LIMIT ${perPage + 1} OFFSET ${offset}`).bind(...ps);
           countStmt = env.DB.prepare(`SELECT COUNT(*) as n FROM (SELECT 1 FROM tracks_fts JOIN tracks t ON t.id = tracks_fts.rowid WHERE ${wh} GROUP BY lower(t.title), lower(t.artist) LIMIT 10001)`).bind(...ps);
