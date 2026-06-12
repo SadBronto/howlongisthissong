@@ -28,6 +28,7 @@ export interface Track {
   loudness:           number | null;    // AcousticBrainz: integrated loudness in dBFS
   dynamic_complexity: number | null;    // AcousticBrainz: dynamic complexity
   relevance?: number;
+  version_count?: number;               // # of recordings in this song's group (only on grouped /search results)
 }
 
 export interface SearchResult {

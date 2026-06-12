@@ -10,6 +10,9 @@ interface TrackCardProps {
   tolerance?:     number; // ms
 }
 
+// Same worker that serves /search also serves /versions (every recording of one song).
+const WORKER_BASE = process.env.NEXT_PUBLIC_WORKER_URL ?? '';
+
 export default function TrackCard({ track, exactDuration, tolerance = 0 }: TrackCardProps) {
   const duration = track.duration_ms != null ? formatDuration(track.duration_ms, true) : '?:??.???';
 
@@ -39,6 +42,40 @@ export default function TrackCard({ track, exactDuration, tolerance = 0 }: Track
       {text}
     </button>
   );
+
+  // ── "N more versions" ───────────────────────────────────────────────────────
+  // Grouped /search results carry version_count (# of recordings of the same song).
+  // >1 means other recordings exist (live, remaster, alt album…). We fetch the full
+  // list lazily on first expand and cache it for the life of the card.
+  const moreCount = (track.version_count ?? 1) - 1;
+  const canExpand = moreCount > 0 && !!track.artist;
+  const [expanded, setExpanded] = useState(false);
+  const [versions, setVersions] = useState<Track[] | null>(null);
+  const [vLoading, setVLoading] = useState(false);
+  const [vError,   setVError]   = useState(false);
+
+  const toggleVersions = async () => {
+    const next = !expanded;
+    setExpanded(next);
+    if (next && versions == null && !vLoading) {
+      setVLoading(true);
+      setVError(false);
+      try {
+        const params = new URLSearchParams({ title: track.title, artist: track.artist ?? '' });
+        const res = await fetch(`${WORKER_BASE}/versions?${params}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        setVersions((data.versions ?? []) as Track[]);
+      } catch {
+        setVError(true);
+      } finally {
+        setVLoading(false);
+      }
+    }
+  };
+
+  // Every recording except the headline (already shown as this card's main row).
+  const otherVersions = versions?.filter(v => String(v.id) !== String(track.id)) ?? [];
 
   return (
     <div className="flex items-center gap-3 sm:gap-4 py-3 px-3 rounded-lg hover:bg-gray-50 transition-colors">
@@ -117,6 +154,55 @@ export default function TrackCard({ track, exactDuration, tolerance = 0 }: Track
                 audioChip(`Dyn ${track.dynamic_complexity.toFixed(1)}`, `Dynamic complexity: ${track.dynamic_complexity.toFixed(1)} — average variation in loudness; higher = more dramatic shifts between quiet and loud.`)}
             </div>
             {info && <p className="text-xs text-gray-400 mt-1 leading-snug">{info}</p>}
+          </div>
+        )}
+
+        {/* "N more versions" — same song, other recordings (live, remaster, alt album…) */}
+        {canExpand && (
+          <div className="mt-1.5">
+            <button
+              type="button"
+              onClick={toggleVersions}
+              aria-expanded={expanded}
+              className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-700 transition-colors"
+            >
+              <svg className={`h-3 w-3 transition-transform duration-150 ${expanded ? 'rotate-90' : ''}`}
+                fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+              </svg>
+              {expanded ? 'Hide versions' : `${moreCount} more version${moreCount === 1 ? '' : 's'}`}
+            </button>
+
+            {expanded && (
+              <div className="mt-1.5 pl-3 border-l-2 border-gray-100 space-y-1.5">
+                {vLoading && <p className="text-xs text-gray-400">Loading versions…</p>}
+                {vError && (
+                  <p className="text-xs text-red-400">
+                    Couldn&rsquo;t load versions.{' '}
+                    <button type="button" onClick={toggleVersions} className="underline hover:text-red-500">
+                      Retry
+                    </button>
+                  </p>
+                )}
+                {!vLoading && !vError && otherVersions.length === 0 && (
+                  <p className="text-xs text-gray-400">No other versions found.</p>
+                )}
+                {otherVersions.map(v => (
+                  <div key={v.id} className="flex items-baseline gap-3 leading-snug">
+                    <span className="flex-shrink-0 font-mono text-xs text-gray-500 tabular-nums w-16 text-right">
+                      {v.duration_ms != null ? formatDuration(v.duration_ms, true) : '?:??.???'}
+                    </span>
+                    <span className="min-w-0 text-xs text-gray-500">
+                      {v.version
+                        ? <span className="text-blue-500">{v.version}</span>
+                        : <span className="italic text-gray-400">studio / untagged</span>}
+                      {v.album && <span className="text-gray-400"> · <span className="italic">{v.album}</span></span>}
+                      {v.release_year && <span className="text-gray-400"> · {v.release_year}</span>}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
       </div>

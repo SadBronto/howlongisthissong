@@ -175,6 +175,10 @@ export default function SearchPage() {
       if (f.artistLenMin)     params.set('artist_len_min', f.artistLenMin);
       if (f.artistLenMax)     params.set('artist_len_max', f.artistLenMax);
       if (am)                 params.set('mode',           'artists');
+      // Group same-song versions behind one headline + "N more versions" (keyword
+      // searches only — the worker ignores group=1 for duration/filter-only and for
+      // artists mode, so it's safe to always send outside artists mode).
+      else                    params.set('group',          '1');
       params.set('page',     String(pg));
       params.set('per_page', String(pp));
       if (s !== 'relevance') params.set('sort', s);

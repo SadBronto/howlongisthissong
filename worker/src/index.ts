@@ -234,6 +234,21 @@ function groupedFtsQuery(whereClause: string): string {
   `;
 }
 
+/** Build an FTS term that narrows to the candidate rows for ONE song before the exact
+ *  lower(title)=? AND lower(artist)=? equality filter runs. AND-ing the title and artist
+ *  word tokens keeps the candidate set tiny (a few rows) so the equality filter never
+ *  full-scans the 5.7M-row table. Returns '' only when neither field has an alphanumeric
+ *  token (extremely rare — e.g. a title that's pure punctuation), in which case the caller
+ *  falls back to a direct equality scan. */
+function versionsFtsTerm(title: string, artist: string): string {
+  const toks = (s: string) => s.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
+  const parts = [
+    ...toks(title).map(t  => `title:${t}`),
+    ...toks(artist).map(t => `artist:${t}`),
+  ];
+  return parts.join(' ');
+}
+
 function buildDurationClause(alias: string, minDuration: number | null, maxDuration: number | null): { sql: string; params: unknown[] } {
   const p = alias ? `${alias}.` : '';
   if (minDuration != null && maxDuration != null) {
@@ -459,6 +474,14 @@ export default {
 
     const url = new URL(request.url);
 
+    // Generous length caps — only stop abusive/garbage payloads, never a real search.
+    // (No real song title/artist/query approaches these limits.) Defined up here so the
+    // /versions handler below can use it too.
+    const cap = (s: string | null, n: number): string | undefined => {
+      if (!s) return undefined;
+      return s.length > n ? s.slice(0, n) : s;
+    };
+
     // ── /status — enrichment progress ────────────────────────────────────────
     if (url.pathname === '/status') {
       const [total, bySource] = await Promise.all([
@@ -473,6 +496,60 @@ export default {
         sources[row.src] = row.n;
       }
       return json({ total: total?.n ?? 0, bySource: sources });
+    }
+
+    // ── /versions — every recording of one song (same title + same artist) ───
+    // Powers the "N more versions" expand in the UI. FTS-scoped so it's fast: the MATCH
+    // narrows to a few candidate rows, then the exact equality filter selects only this
+    // song. Ordered headline-first (studio-preferred), the same rank that picks the
+    // grouped headline in /search?group=1.
+    if (url.pathname === '/versions') {
+      const vTitle  = (cap(url.searchParams.get('title'),  300) ?? '').trim();
+      const vArtist = (cap(url.searchParams.get('artist'), 300) ?? '').trim();
+      if (!vTitle || !vArtist) {
+        return json({ error: 'title and artist are both required' }, 400);
+      }
+
+      // Edge-cache identical lookups (same 5-min TTL as /search).
+      const vCache    = caches.default;
+      const vCacheKey = new Request(url.toString());
+      const vHit      = await vCache.match(vCacheKey);
+      if (vHit) return vHit;
+
+      try {
+        const ftsTerm = versionsFtsTerm(vTitle, vArtist);
+        const lt = vTitle.toLowerCase();
+        const la = vArtist.toLowerCase();
+
+        // Cap the payload so a pathological song (hundreds of recordings) can't return an
+        // unbounded blob. HEADLINE_RANK_GROUPED references the output aliases
+        // (popularity / version / duration_ms), which both column lists expose.
+        const stmt = ftsTerm
+          ? env.DB.prepare(
+              `SELECT ${JOINED_COLS} FROM tracks_fts JOIN tracks t ON t.id = tracks_fts.rowid
+               WHERE tracks_fts MATCH ? AND lower(t.title) = ? AND lower(t.artist) = ?
+               ORDER BY ${HEADLINE_RANK_GROUPED} LIMIT 500`
+            ).bind(ftsTerm, lt, la)
+          // Rare fallback: a title+artist with no alphanumeric tokens can't use FTS.
+          : env.DB.prepare(
+              `SELECT ${DIRECT_COLS} FROM tracks
+               WHERE lower(title) = ? AND lower(artist) = ?
+               ORDER BY ${HEADLINE_RANK_GROUPED} LIMIT 500`
+            ).bind(lt, la);
+
+        const result   = await stmt.all();
+        const versions = (result.results ?? []) as TrackRow[];
+
+        const resp = new Response(
+          JSON.stringify({ versions, total: versions.length, title: vTitle, artist: vArtist }),
+          { status: 200, headers: { ...CORS_HEADERS, 'Cache-Control': 'public, max-age=300' } },
+        );
+        ctx.waitUntil(vCache.put(vCacheKey, resp.clone()));
+        return resp;
+      } catch (err) {
+        console.error('Versions error:', err);
+        return json({ error: 'Versions lookup failed' }, 500);
+      }
     }
 
     if (url.pathname !== '/search') return json({ error: 'Not found' }, 404);
@@ -494,13 +571,6 @@ export default {
       });
       ctx.waitUntil(cache.put(cacheKey, resp.clone()));
       return resp;
-    };
-
-    // Generous length caps — only stop abusive/garbage payloads, never a real search.
-    // (No real song title/artist/query approaches these limits.)
-    const cap = (s: string | null, n: number): string | undefined => {
-      if (!s) return undefined;
-      return s.length > n ? s.slice(0, n) : s;
     };
 
     const q         = (cap(url.searchParams.get('q'), 200) ?? '');
