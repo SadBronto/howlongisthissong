@@ -1104,7 +1104,7 @@ export default function SearchPage() {
         <a href="https://listenbrainz.org" target="_blank" rel="noopener noreferrer"
           className="underline hover:text-gray-500 transition-colors">ListenBrainz</a>
         {searchCount != null && (
-          <div className="mt-2 text-gray-400">🔎 {searchCount.toLocaleString()} searches run</div>
+          <>{' '}· {searchCount.toLocaleString()} searches run</>
         )}
       </footer>
     </div>
