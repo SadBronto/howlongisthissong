@@ -2,9 +2,10 @@
 import { parseQuery, exactDurationRange, sanitizeForFts } from '../../lib/queryParser';
 
 export interface Env {
-  DB:              D1Database;
-  LASTFM_API_KEY:  string;
-  RATE_LIMITER:    { limit: (opts: { key: string }) => Promise<{ success: boolean }> };
+  DB:                 D1Database;
+  LASTFM_API_KEY:     string;
+  LISTENBRAINZ_TOKEN: string;   // required now — LB blocks unauthenticated popularity calls (401)
+  RATE_LIMITER:       { limit: (opts: { key: string }) => Promise<{ success: boolean }> };
 }
 
 const CORS_HEADERS = {
@@ -330,13 +331,17 @@ async function lfmLookup(row: EnrichRow, apiKey: string): Promise<number | null>
   return null;
 }
 
-// ListenBrainz: batch POST up to 200 MBIDs, returns map of mbid → user count
-async function lbBatch(mbids: string[]): Promise<Map<string, number>> {
+// ListenBrainz: batch POST up to 200 MBIDs, returns map of mbid → user count.
+// A user token is REQUIRED — LB now returns 401 for unauthenticated requests.
+async function lbBatch(mbids: string[], token: string): Promise<Map<string, number>> {
   const result = new Map<string, number>();
   try {
     const r = await fetch('https://api.listenbrainz.org/1/popularity/recording', {
       method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type':  'application/json',
+        'Authorization': `Token ${token}`,
+      },
       body:    JSON.stringify({ recording_mbids: mbids }),
       signal:  AbortSignal.timeout(15_000),
     });
@@ -365,8 +370,9 @@ function buildPopularityUpdate(rows: EnrichResult[]): string {
   );
 }
 
-// Cron batch size: 50 tracks × 210ms = ~10.5s for Last.fm pass, safely fits in 30s window
-const CRON_BATCH  = 50;
+// Cron batch size: 80 tracks × 210ms ≈ 17s of inter-call waits; with API latency a tick runs
+// ~45-48s wall-clock, which still fits inside the 60s gap before the next cron fires.
+const CRON_BATCH  = 80;
 const LASTFM_WAIT = 210; // ms between Last.fm calls
 
 async function enrichPopularityCron(env: Env): Promise<void> {
@@ -431,7 +437,7 @@ async function enrichPopularityCron(env: Env): Promise<void> {
 
   // ── ListenBrainz fallback (one batch POST for all Last.fm misses) ─────────────
   if (lbNeeded.length > 0) {
-    const lbMap = await lbBatch(lbNeeded);
+    const lbMap = await lbBatch(lbNeeded, env.LISTENBRAINZ_TOKEN);
     for (const mbid of lbNeeded) {
       const users   = lbMap.get(mbid);
       const trackId = mbidToId.get(mbid)!;

@@ -41,15 +41,31 @@ const API_TOKEN      = process.env.CLOUDFLARE_API_TOKEN!;
 const DATABASE_ID    = process.env.CLOUDFLARE_D1_DATABASE_ID!;
 const LASTFM_API_KEY = process.env.LASTFM_API_KEY!;
 
+// ListenBrainz now requires an auth token (returns 401 otherwise). Prefer env, else .dev.vars.
+function loadLbToken(): string {
+  if (process.env.LISTENBRAINZ_TOKEN) return process.env.LISTENBRAINZ_TOKEN.trim();
+  const p = path.resolve(process.cwd(), '.dev.vars');
+  if (fs.existsSync(p)) {
+    for (const raw of fs.readFileSync(p, 'utf8').split(/\r?\n/)) {
+      const line = raw.trim();
+      if (line.startsWith('LISTENBRAINZ_TOKEN')) {
+        return line.split('=').slice(1).join('=').trim().replace(/^["']|["']$/g, '');
+      }
+    }
+  }
+  return '';
+}
+const LB_TOKEN = loadLbToken();
+
 // Empirically established ceilings:
 //   Last.fm — "Creep" & "Smells Like Teen Spirit" both hit ~4.1M listeners; ceiling at 5M
 //   ListenBrainz — "Karma Police" at 279,805; ceiling at 500K (headroom for growth)
 const LASTFM_CEILING = 5_000_000;
 const LB_CEILING     = 500_000;
 
-const BATCH_READ    = 500;    // tracks to read from D1 per loop iteration
+const BATCH_READ    = 100;    // tracks to read from D1 per loop iteration
 const BATCH_WRITE   = 200;    // tracks per CASE UPDATE statement
-const LASTFM_DELAY  = 210;    // ms between Last.fm calls (~4.7 req/sec, safely under 5)
+const LASTFM_DELAY  = 50;     // ms between tracks — API latency (~250ms/call) is the real rate limiter
 const LB_BATCH_SIZE = 200;    // max recording MBIDs per ListenBrainz POST
 
 const CURSOR_FILE = path.join(process.cwd(), '.popularity_cursor');
@@ -191,7 +207,10 @@ async function lbLookup(mbids: string[]): Promise<Map<string, number>> {
     try {
       const res = await fetch('https://api.listenbrainz.org/1/popularity/recording', {
         method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type':  'application/json',
+          'Authorization': `Token ${LB_TOKEN}`,
+        },
         body:    JSON.stringify({ recording_mbids: chunk }),
         signal:  AbortSignal.timeout(20_000),
       });
@@ -280,6 +299,12 @@ async function main() {
       'Get a free key at: https://www.last.fm/api/account/create'
     );
     process.exit(1);
+  }
+  if (!LB_TOKEN) {
+    console.warn(
+      '⚠ LISTENBRAINZ_TOKEN not found (env or .dev.vars) — ListenBrainz fallback will 401 and\n' +
+      '  silently return nothing (tracks would be mis-marked "unfound"). Last.fm still works.'
+    );
   }
 
   // Pause the worker cron so both don't hammer Last.fm simultaneously
@@ -382,6 +407,28 @@ async function main() {
         // Other error → treat as LB candidate or unfound
         if (track.mb_id) { lbNeededIds.push(track.mb_id); mbidToTrackId.set(track.mb_id, track.id); }
         else              { pending.push({ id: track.id, popularity: 0, source: 'unfound' }); totalUnfound++; }
+      }
+
+      // ── Per-track progress ──────────────────────────────────────────────────
+      const currentCount = totalProcessed + i + 1;
+      const elapsedSec   = (Date.now() - startTime) / 1000;
+      const ratePerMin   = elapsedSec > 0 ? Math.round((currentCount / elapsedSec) * 60) : 0;
+      if (limit < Infinity) {
+        const pct    = ((currentCount / limit) * 100).toFixed(1);
+        const etaSec = ratePerMin > 0 ? ((limit - currentCount) / ratePerMin) * 60 : 0;
+        process.stdout.write(
+          `\r  ${currentCount.toLocaleString()}/${limit.toLocaleString()} (${pct}%) | ` +
+          `ETA: ${fmtDuration(etaSec)} | ` +
+          `lfm: ${totalLastfm.toLocaleString()}  lb: ${totalLb.toLocaleString()}  unfound: ${totalUnfound.toLocaleString()} | ` +
+          `${ratePerMin}/min`
+        );
+      } else {
+        process.stdout.write(
+          `\r  ${currentCount.toLocaleString()} processed | ` +
+          `${fmtDuration(elapsedSec)} elapsed | ` +
+          `lfm: ${totalLastfm.toLocaleString()}  lb: ${totalLb.toLocaleString()}  unfound: ${totalUnfound.toLocaleString()} | ` +
+          `${ratePerMin}/min`
+        );
       }
     }
 
