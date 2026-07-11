@@ -558,6 +558,22 @@ export default {
       }
     }
 
+    // ── /stats — public fun-fact counter: total searches run ──────────────────
+    if (url.pathname === '/stats') {
+      const sCache = caches.default;
+      const sKey   = new Request(url.toString());
+      const sHit   = await sCache.match(sKey);
+      if (sHit) return sHit;
+      const row = await env.DB.prepare('SELECT total_searches FROM site_stats WHERE id = 1')
+        .first<{ total_searches: number }>();
+      const resp = new Response(
+        JSON.stringify({ total_searches: row?.total_searches ?? 0 }),
+        { status: 200, headers: { ...CORS_HEADERS, 'Cache-Control': 'public, max-age=60' } },
+      );
+      ctx.waitUntil(sCache.put(sKey, resp.clone()));
+      return resp;
+    }
+
     if (url.pathname !== '/search') return json({ error: 'Not found' }, 404);
 
     // ── Edge cache ────────────────────────────────────────────────────────────
@@ -576,6 +592,11 @@ export default {
         headers: { ...CORS_HEADERS, 'Cache-Control': 'public, max-age=300' },
       });
       ctx.waitUntil(cache.put(cacheKey, resp.clone()));
+      // Fun-fact counter: one increment per uncached search (cache hits return earlier).
+      ctx.waitUntil(
+        env.DB.prepare('UPDATE site_stats SET total_searches = total_searches + 1 WHERE id = 1')
+          .run().catch(() => {})
+      );
       return resp;
     };
 

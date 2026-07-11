@@ -76,6 +76,17 @@ export default function SearchPage() {
   const [loading,     setLoading]     = useState(false);
   const [error,       setError]       = useState<string | null>(null);
   const [slowSearch,  setSlowSearch]  = useState(false);  // true once a search has run >5s
+  const [searchCount, setSearchCount] = useState<number | null>(null);  // footer fun-fact tally
+
+  // Fetch the running search tally once on mount for the footer curiosity.
+  useEffect(() => {
+    let alive = true;
+    fetch(`${process.env.NEXT_PUBLIC_WORKER_URL ?? ''}/stats`)
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => { if (alive && d && typeof d.total_searches === 'number') setSearchCount(d.total_searches); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, []);
 
   // ── Pagination + sort state ────────────────────────────────────────────────
   const [page, setPage] = useState(() =>
@@ -1092,6 +1103,9 @@ export default function SearchPage() {
         {' '}&amp;{' '}
         <a href="https://listenbrainz.org" target="_blank" rel="noopener noreferrer"
           className="underline hover:text-gray-500 transition-colors">ListenBrainz</a>
+        {searchCount != null && (
+          <div className="mt-2 text-gray-400">🔎 {searchCount.toLocaleString()} searches run</div>
+        )}
       </footer>
     </div>
   );
