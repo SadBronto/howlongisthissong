@@ -1104,6 +1104,10 @@ export default function SearchPage() {
       <footer className="text-center text-xs text-gray-300 py-4 border-t border-gray-100">
         <a href="/help" className="text-gray-400 hover:text-blue-500 underline transition-colors">Search guide</a>
         <span className="mx-2">·</span>
+        <a href="/privacy" className="text-gray-400 hover:text-blue-500 underline transition-colors">Privacy</a>
+        <span className="mx-2">·</span>
+        <a href="/terms" className="text-gray-400 hover:text-blue-500 underline transition-colors">Terms</a>
+        <span className="mx-2">·</span>
         <a href="/legal" className="text-gray-400 hover:text-blue-500 underline transition-colors">Legal</a>
         <span className="mx-2">·</span>
         Track data from{' '}

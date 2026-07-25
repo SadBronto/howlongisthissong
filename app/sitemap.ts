@@ -17,6 +17,18 @@ export default function sitemap(): MetadataRoute.Sitemap {
       priority: 0.5,
     },
     {
+      url: 'https://howlongisthissong.com/privacy',
+      lastModified: new Date(),
+      changeFrequency: 'yearly',
+      priority: 0.1,
+    },
+    {
+      url: 'https://howlongisthissong.com/terms',
+      lastModified: new Date(),
+      changeFrequency: 'yearly',
+      priority: 0.1,
+    },
+    {
       url: 'https://howlongisthissong.com/legal',
       lastModified: new Date(),
       changeFrequency: 'yearly',

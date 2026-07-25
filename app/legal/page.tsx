@@ -1,10 +1,9 @@
 import type { Metadata } from 'next';
 
 export const metadata: Metadata = {
-  title: 'Legal — Terms, Privacy & Attribution · HowLongIsThisSong.com',
-  description: 'Terms of use, privacy policy, and data/image attributions for HowLongIsThisSong.com.',
+  title: 'Legal · HowLongIsThisSong.com',
+  description: 'Copyright, trademarks, and attribution for HowLongIsThisSong.com.',
   alternates: { canonical: '/legal' },
-  robots: { index: true, follow: true },
 };
 
 const UPDATED = 'July 25, 2026';
@@ -19,72 +18,13 @@ export default function LegalPage() {
         <p className="mt-1 text-sm text-gray-400">Last updated {UPDATED}</p>
 
         <p className="mt-6 text-sm leading-relaxed">
-          HowLongIsThisSong.com (&ldquo;the Site&rdquo;) is a free tool for looking up song
-          durations and related metadata. By using the Site you agree to the terms below.
+          This page covers copyright, trademarks, and attribution for HowLongIsThisSong.com. See
+          also our{' '}
+          <a href="/privacy" className="text-blue-600 hover:underline">Privacy Policy</a> and{' '}
+          <a href="/terms" className="text-blue-600 hover:underline">Terms of Use</a>.
         </p>
 
-        {/* ── Terms of Use ─────────────────────────────────────────────── */}
-        <h2 className="mt-10 text-lg font-semibold text-gray-900">Terms of Use</h2>
-        <ul className="mt-3 space-y-3 text-sm leading-relaxed list-disc pl-5">
-          <li>
-            The Site is provided free of charge, <strong>&ldquo;as is&rdquo; and
-            &ldquo;as available,&rdquo;</strong> for personal and informational use, with no
-            warranty of any kind.
-          </li>
-          <li>
-            Song data (durations, BPM, titles, artists, years, and other metadata) is aggregated
-            from third-party sources and <strong>may be inaccurate, incomplete, or out of
-            date.</strong> Do not rely on it for any purpose where accuracy matters.
-          </li>
-          <li>
-            To the fullest extent permitted by law, the Site and its operator are not liable for
-            any damages or losses arising from your use of, or inability to use, the Site.
-          </li>
-          <li>
-            Please use the Site reasonably. Automated scraping, bulk harvesting, or activity that
-            places excessive load on the service is not permitted, and requests are rate-limited.
-          </li>
-          <li>
-            The Site may be changed, limited, or discontinued at any time without notice. These
-            terms may be updated; continued use means you accept the current version.
-          </li>
-          <li>
-            All third-party names, data, and trademarks belong to their respective owners.
-          </li>
-        </ul>
-
-        {/* ── Privacy ──────────────────────────────────────────────────── */}
-        <h2 className="mt-10 text-lg font-semibold text-gray-900">Privacy</h2>
-        <ul className="mt-3 space-y-3 text-sm leading-relaxed list-disc pl-5">
-          <li>
-            <strong>No accounts, no personal data.</strong> The Site does not ask for or require
-            any personal information, and there is nothing to sign up for.
-          </li>
-          <li>
-            When you run a search, your query is sent to our search service to return results.
-            Standard, non-identifying request information (such as IP address and timing) may be
-            processed transiently by our infrastructure providers for reliability, security, and
-            abuse prevention. We do not use this to build a profile of you.
-          </li>
-          <li>
-            We keep only <strong>aggregate, anonymous counts</strong> &mdash; for example, a
-            running total of searches performed &mdash; which are not linked to any individual.
-          </li>
-          <li>
-            <strong>No advertising or tracking cookies.</strong> We do not sell or share personal
-            data (we do not collect any to begin with).
-          </li>
-          <li>
-            The Site is hosted on Netlify and its search runs on Cloudflare Workers; those
-            providers process requests under their own privacy policies.
-          </li>
-          <li>
-            The Site is intended for a general audience and is not directed at children.
-          </li>
-        </ul>
-
-        {/* ── Attribution ──────────────────────────────────────────────── */}
-        <h2 className="mt-10 text-lg font-semibold text-gray-900">Attribution &amp; Data Sources</h2>
+        <h2 className="mt-10 text-lg font-semibold text-gray-900">Attribution &amp; data sources</h2>
         <ul className="mt-3 space-y-3 text-sm leading-relaxed list-disc pl-5">
           <li>
             The site logo incorporates the &ldquo;Stopwatch Silhouette and Line Art Icon&rdquo;
@@ -111,9 +51,39 @@ export default function LegalPage() {
           </li>
         </ul>
 
-        <div className="mt-10">
-          <a href="/" className="text-sm text-blue-600 hover:underline">&larr; Back to search</a>
-        </div>
+        <h2 className="mt-10 text-lg font-semibold text-gray-900">Copyright</h2>
+        <p className="mt-3 text-sm leading-relaxed">
+          &copy; 2026 HowLongIsThisSong.com. The original design, layout, code, and written copy
+          of the Site are protected by copyright and other applicable laws. You may not copy,
+          reproduce, or use them to create a competing or confusingly similar service without
+          permission. Song and release metadata is owned by its respective sources and is used
+          under their licenses.
+        </p>
+
+        <h2 className="mt-10 text-lg font-semibold text-gray-900">Trademarks</h2>
+        <p className="mt-3 text-sm leading-relaxed">
+          Artist names, song and album titles, record labels, service names, and other third-party
+          names, logos, and trademarks referenced on the Site belong to their respective owners.
+          Their appearance here is for identification and reference only and does not imply any
+          affiliation with, or endorsement by, those owners.
+        </p>
+
+        <h2 className="mt-10 text-lg font-semibold text-gray-900">Contact</h2>
+        <p className="mt-3 text-sm leading-relaxed">
+          For copyright, trademark, or other legal questions, email{' '}
+          <a href="mailto:legal@howlongisthissong.com" className="text-blue-600 hover:underline">
+            legal@howlongisthissong.com</a>.
+        </p>
+
+        <nav className="mt-12 pt-6 border-t border-gray-100 text-sm text-gray-400">
+          <a href="/privacy" className="text-blue-600 hover:underline">Privacy</a>
+          <span className="mx-2">·</span>
+          <a href="/terms" className="text-blue-600 hover:underline">Terms</a>
+          <span className="mx-2">·</span>
+          <a href="/legal" className="text-blue-600 hover:underline">Legal</a>
+          <span className="mx-2">·</span>
+          <a href="/" className="text-blue-600 hover:underline">Back to search</a>
+        </nav>
       </div>
     </main>
   );
