@@ -439,12 +439,25 @@ export default function SearchPage() {
         <a
           href="/"
           onClick={(e) => { e.preventDefault(); handleClear(); setAdvExpanded(false); }}
-          className="no-underline"
+          className={`no-underline flex items-center gap-2 sm:gap-3 transition-all duration-200 ${
+            hasQuery || hasFilters ? 'mb-3' : 'mb-4'
+          }`}
         >
           {/* Visible brand logo. Not the semantic <h1> — that's server-rendered in
               app/page.tsx so scanners/search see the page's purpose in the initial HTML. */}
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src="/logo.png"
+            alt=""
+            aria-hidden="true"
+            width={1024}
+            height={1238}
+            className={`w-auto shrink-0 transition-all duration-200 ${
+              hasQuery || hasFilters ? 'h-7 sm:h-8' : 'h-10 sm:h-14'
+            }`}
+          />
           <div className={`font-bold text-gray-900 tracking-tight transition-all duration-200 select-none ${
-            hasQuery || hasFilters ? 'text-xl mb-3' : 'text-3xl sm:text-5xl mb-4'
+            hasQuery || hasFilters ? 'text-xl' : 'text-3xl sm:text-5xl'
           }`}>
             <span className="text-blue-600">HowLong</span>IsThisSong
             <span className="text-gray-300">.com</span>
@@ -1090,6 +1103,8 @@ export default function SearchPage() {
 
       <footer className="text-center text-xs text-gray-300 py-4 border-t border-gray-100">
         <a href="/help" className="text-gray-400 hover:text-blue-500 underline transition-colors">Search guide</a>
+        <span className="mx-2">·</span>
+        <a href="/legal" className="text-gray-400 hover:text-blue-500 underline transition-colors">Legal</a>
         <span className="mx-2">·</span>
         Track data from{' '}
         <a href="https://musicbrainz.org" target="_blank" rel="noopener noreferrer"

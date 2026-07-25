@@ -32,11 +32,13 @@ export const metadata: Metadata = {
     url: 'https://howlongisthissong.com',
     siteName: 'HowLongIsThisSong.com',
     type: 'website',
+    images: [{ url: '/logo.png', width: 1024, height: 1238, alt: 'HowLongIsThisSong.com logo' }],
   },
   twitter: {
     card: 'summary',
     title: 'HowLongIsThisSong.com',
     description: DESCRIPTION,
+    images: ['/logo.png'],
   },
 };
 

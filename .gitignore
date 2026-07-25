@@ -33,3 +33,6 @@ next-env.d.ts
 /mbdump/
 *.bz2
 *.tar
+
+# logo source (245MB EPS — keep out of git; web assets live in /public and /app)
+*.eps
