@@ -111,12 +111,7 @@ export default function LegalPage() {
           </li>
         </ul>
 
-        <p className="mt-10 text-xs text-gray-400 leading-relaxed">
-          Questions about this page can be directed to the site operator. This page is a
-          plain-language summary and does not constitute legal advice.
-        </p>
-
-        <div className="mt-8">
+        <div className="mt-10">
           <a href="/" className="text-sm text-blue-600 hover:underline">&larr; Back to search</a>
         </div>
       </div>
