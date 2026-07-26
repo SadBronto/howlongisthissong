@@ -24,14 +24,8 @@ export default function LegalPage() {
           <a href="/terms" className="text-blue-600 hover:underline">Terms of Use</a>.
         </p>
 
-        <h2 className="mt-10 text-lg font-semibold text-gray-900">Attribution &amp; data sources</h2>
+        <h2 className="mt-10 text-lg font-semibold text-gray-900">Data sources</h2>
         <ul className="mt-3 space-y-3 text-sm leading-relaxed list-disc pl-5">
-          <li>
-            The site logo incorporates the &ldquo;Stopwatch Silhouette and Line Art Icon&rdquo;
-            from{' '}
-            <a href="https://www.vecteezy.com" target="_blank" rel="noopener noreferrer"
-              className="text-blue-600 hover:underline">Vecteezy.com</a>.
-          </li>
           <li>
             Track and release metadata is provided by{' '}
             <a href="https://musicbrainz.org" target="_blank" rel="noopener noreferrer"
