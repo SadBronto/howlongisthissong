@@ -91,7 +91,7 @@ export default function SearchResults({
           )}
           {parsed?.exactDuration != null && (
             <>
-              {' '}— <span className="font-mono text-gray-700">{formatDuration(parsed.exactDuration)}</span>
+              {' '}· <span className="font-mono text-gray-700">{formatDuration(parsed.exactDuration)}</span>
               {tolerance > 0 && (
                 <span className="text-gray-400"> {toleranceLabel(tolerance)}</span>
               )}
@@ -99,7 +99,7 @@ export default function SearchResults({
           )}
           {parsed?.minDuration != null && parsed?.maxDuration != null && !parsed?.exactDuration && (
             <>
-              {' '}— <span className="font-mono text-gray-700">{formatDuration(parsed.minDuration)}</span>
+              {' '}· <span className="font-mono text-gray-700">{formatDuration(parsed.minDuration)}</span>
               {' to '}
               <span className="font-mono text-gray-700">{formatDuration(parsed.maxDuration)}</span>
             </>
@@ -107,7 +107,7 @@ export default function SearchResults({
         </p>
 
         <div className="flex items-center gap-3 flex-wrap">
-          {/* Tolerance slider — only for exact time searches */}
+          {/* Tolerance slider - only for exact time searches */}
           {isExactTime && (
             <div className="flex items-center gap-2">
               <span className="text-xs text-gray-400 w-10 text-right tabular-nums">
@@ -159,7 +159,7 @@ export default function SearchResults({
 
       {/* Enrichment disclaimer */}
       <p className="text-xs text-gray-400 px-1 py-2 leading-relaxed">
-        Popularity and genre data are actively filling in — the most-searched songs get enriched first,
+        Popularity and genre data are actively filling in. The most-searched songs get enriched first,
         so the index improves every day.
       </p>
 

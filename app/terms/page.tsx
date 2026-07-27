@@ -72,13 +72,6 @@ export default function TermsPage() {
           means you accept the current version.
         </p>
 
-        <h2 className="mt-10 text-lg font-semibold text-gray-900">Contact</h2>
-        <p className="mt-3 text-sm leading-relaxed">
-          Questions about these Terms? Email{' '}
-          <a href="mailto:legal@howlongisthissong.com" className="text-blue-600 hover:underline">
-            legal@howlongisthissong.com</a>.
-        </p>
-
         <nav className="mt-12 pt-6 border-t border-gray-100 text-sm text-gray-400">
           <a href="/privacy" className="text-blue-600 hover:underline">Privacy</a>
           <span className="mx-2">·</span>

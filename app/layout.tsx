@@ -15,11 +15,11 @@ const WORKER_ORIGIN = (() => {
 
 const DESCRIPTION =
   "The internet's premium song search. Find any song by exact length, duration range, " +
-  'BPM, title, artist, year, and more — across millions of tracks.';
+  'BPM, title, artist, year, and more, across millions of tracks.';
 
 export const metadata: Metadata = {
   metadataBase: new URL('https://howlongisthissong.com'),
-  title: 'HowLongIsThisSong.com — search songs by length, BPM & more',
+  title: 'HowLongIsThisSong.com | search songs by length, BPM & more',
   description: DESCRIPTION,
   keywords: [
     'song length', 'song duration', 'how long is this song', 'song runtime',

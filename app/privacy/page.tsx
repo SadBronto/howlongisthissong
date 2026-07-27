@@ -28,7 +28,7 @@ export default function PrivacyPage() {
         <ul className="mt-3 space-y-3 text-sm leading-relaxed list-disc pl-5">
           <li>
             <strong>Search queries.</strong> The words and filters you enter are sent to our
-            search service to return results. They are not tied to your identity &mdash; there are
+            search service to return results. They are not tied to your identity. There are
             no accounts, and we don&rsquo;t build a profile of you.
           </li>
           <li>
@@ -37,8 +37,8 @@ export default function PrivacyPage() {
             operate and secure the service and to prevent abuse.
           </li>
           <li>
-            <strong>Aggregate counts.</strong> We keep anonymous totals &mdash; for example, a
-            running count of searches performed &mdash; which are not linked to any individual.
+            <strong>Aggregate counts.</strong> We keep anonymous totals (for example, a
+            running count of searches performed) that are not linked to any individual.
           </li>
         </ul>
         <p className="mt-3 text-sm leading-relaxed">
@@ -48,7 +48,7 @@ export default function PrivacyPage() {
 
         <h2 className="mt-10 text-lg font-semibold text-gray-900">How we use your information</h2>
         <ul className="mt-3 space-y-3 text-sm leading-relaxed list-disc pl-5">
-          <li>To provide the service &mdash; running your search and returning results.</li>
+          <li>To provide the service: running your search and returning results.</li>
           <li>To keep the service reliable and secure, and to prevent abuse.</li>
           <li>To maintain simple aggregate statistics, such as the total number of searches.</li>
         </ul>
@@ -59,11 +59,11 @@ export default function PrivacyPage() {
         <h2 className="mt-10 text-lg font-semibold text-gray-900">Service providers we use</h2>
         <ul className="mt-3 space-y-3 text-sm leading-relaxed list-disc pl-5">
           <li>
-            <strong>Cloudflare</strong> &mdash; runs our search backend and database and provides
+            <strong>Cloudflare</strong>: runs our search backend and database and provides
             network security. Subject to Cloudflare&rsquo;s privacy policy.
           </li>
           <li>
-            <strong>Netlify</strong> &mdash; website hosting and content delivery. Subject to
+            <strong>Netlify</strong>: website hosting and content delivery. Subject to
             Netlify&rsquo;s privacy policy.
           </li>
         </ul>
@@ -71,7 +71,7 @@ export default function PrivacyPage() {
         <h2 className="mt-10 text-lg font-semibold text-gray-900">Cookies &amp; tracking</h2>
         <p className="mt-3 text-sm leading-relaxed">
           We do not use advertising or tracking cookies. Your current search is kept in the page
-          URL so results can be shared and bookmarked &mdash; not in any tracking cookie.
+          URL so results can be shared and bookmarked, not in any tracking cookie.
         </p>
 
         <h2 className="mt-10 text-lg font-semibold text-gray-900">Data retention</h2>
@@ -89,8 +89,7 @@ export default function PrivacyPage() {
         <h2 className="mt-10 text-lg font-semibold text-gray-900">Your choices</h2>
         <p className="mt-3 text-sm leading-relaxed">
           Because we don&rsquo;t collect personal information or maintain accounts, there is no
-          personal profile to access, correct, or delete. For any privacy question, contact us
-          below.
+          personal profile to access, correct, or delete.
         </p>
 
         <h2 className="mt-10 text-lg font-semibold text-gray-900">Changes to this policy</h2>
@@ -101,9 +100,7 @@ export default function PrivacyPage() {
 
         <h2 className="mt-10 text-lg font-semibold text-gray-900">Contact</h2>
         <p className="mt-3 text-sm leading-relaxed">
-          Questions about this policy? Email{' '}
-          <a href="mailto:legal@howlongisthissong.com" className="text-blue-600 hover:underline">
-            legal@howlongisthissong.com</a>.
+          Please don&rsquo;t.
         </p>
 
         <nav className="mt-12 pt-6 border-t border-gray-100 text-sm text-gray-400">

@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 
 export const metadata: Metadata = {
-  title: 'Search guide — HowLongIsThisSong.com',
+  title: 'Search guide · HowLongIsThisSong.com',
   description:
     'How to search HowLongIsThisSong.com: exact times, ranges, open-ended durations, ' +
     'wildcards, whole-word matching, and every advanced filter (genre, BPM, year, length, and more).',
@@ -39,7 +39,7 @@ export default function HelpPage() {
         <Link href="/" className="text-sm text-blue-600 hover:underline">&larr; Back to search</Link>
         <h1 className="text-3xl font-bold text-gray-900 mt-4">Search guide</h1>
         <p className="text-gray-500 mt-2">
-          Everything you can do with HowLongIsThisSong.com&rsquo;s search &mdash; from a plain song
+          Everything you can do with HowLongIsThisSong.com&rsquo;s search, from a plain song
           title to a five-filter deep dive.
         </p>
 
@@ -87,7 +87,7 @@ export default function HelpPage() {
           <p className="text-xs text-gray-500 mt-3">
             The whole-word and &ldquo;starts-with&rdquo; searches are instant. The ones that start with
             <Code>*</Code> (&ldquo;ends with&rdquo; / &ldquo;contains&rdquo;) have to read the whole
-            library, so they can take a while &mdash; the site will tell you it&rsquo;s still working.
+            library, so they can take a while, and the site will tell you it&rsquo;s still working.
           </p>
         </Section>
 
@@ -99,15 +99,15 @@ export default function HelpPage() {
           <Row ex="Title / Artist" desc="Match the song title or the artist (wildcards work here too)." />
           <Row ex="Genre" desc="rock, jazz, hip-hop, and so on." />
           <Row ex="Year / Decade" desc="A year range, or tap a decade chip (80s, 90s…)." />
-          <Row ex="BPM" desc="Tempo range. (Algorithmically detected — treat as approximate.)" />
-          <Row ex="Title / Artist length" desc="Number of characters — e.g. songs under 10 letters." />
+          <Row ex="BPM" desc="Tempo range. (Algorithmically detected, treat as approximate.)" />
+          <Row ex="Title / Artist length" desc="Number of characters, e.g. songs under 10 letters." />
           <Row ex="Label · Country · Language" desc="Record label, artist country, ISO language code." />
           <Row ex="Release type" desc="Album, Single, EP, Broadcast, Other." />
         </Section>
 
         <Section title="Artists only">
           <p className="text-sm text-gray-600">
-            Tick <strong>Artists only</strong> to get a list of artist names instead of songs &mdash;
+            Tick <strong>Artists only</strong> to get a list of artist names instead of songs,
             handy for &ldquo;which bands have a one-word name&rdquo; type questions. Sort by popularity
             or alphabetically.
           </p>
@@ -122,16 +122,16 @@ export default function HelpPage() {
             and popularity from{' '}
             <a href="https://www.last.fm" className="text-blue-600 hover:underline">Last.fm</a> and{' '}
             <a href="https://listenbrainz.org" className="text-blue-600 hover:underline">ListenBrainz</a>.
-            Popularity, genre, and audio data are still filling in &mdash; the most-searched songs get
-            enriched first, so the index improves every day.
+            Popularity, genre, and audio data are still filling in, so the most-searched songs get
+            enriched first, and the index improves every day.
           </p>
         </Section>
 
         <Section title="Why is a search slow sometimes?">
           <p className="text-sm text-gray-600">
             We don&rsquo;t run the heavy search hardware the big sites do. Most searches are instant, but
-            ones that have to scan the whole library &mdash; a wildcard that starts with <Code>*</Code>,
-            or filters with no keyword &mdash; genuinely take time. They still return real results;
+            ones that have to scan the whole library (a wildcard that starts with <Code>*</Code>,
+            or filters with no keyword) genuinely take time. They still return real results;
             adding a plain word from the title or artist makes them fast again.
           </p>
         </Section>

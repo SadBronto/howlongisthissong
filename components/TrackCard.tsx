@@ -135,7 +135,7 @@ export default function TrackCard({ track, exactDuration, tolerance = 0 }: Track
           ))}
         </div>
 
-        {/* AcousticBrainz audio properties — tap a chip (or hover) for what it means */}
+        {/* AcousticBrainz audio properties - tap a chip (or hover) for what it means */}
         {(track.bpm != null || track.key_key != null || track.loudness != null ||
           track.danceability != null || track.tuning_freq != null || track.dynamic_complexity != null) && (
           <div className="mt-1">
@@ -147,17 +147,17 @@ export default function TrackCard({ track, exactDuration, tolerance = 0 }: Track
               {track.loudness != null &&
                 audioChip(`${track.loudness.toFixed(1)} dB`, `Integrated loudness: ${track.loudness.toFixed(1)} dB (0 dB = maximum; more negative = quieter).`)}
               {track.danceability != null &&
-                audioChip(`Dance ${Math.round((track.danceability / 3) * 100)}%`, `Danceability: ${Math.round((track.danceability / 3) * 100)}% — how suitable the track is for dancing, based on rhythm stability and beat strength.`)}
+                audioChip(`Dance ${Math.round((track.danceability / 3) * 100)}%`, `Danceability: ${Math.round((track.danceability / 3) * 100)}%. How suitable the track is for dancing, based on rhythm stability and beat strength.`)}
               {track.tuning_freq != null &&
                 audioChip(`${Math.round(track.tuning_freq)} Hz`, `Tuning frequency: ${Math.round(track.tuning_freq)} Hz (standard pitch = 440 Hz).`)}
               {track.dynamic_complexity != null &&
-                audioChip(`Dyn ${track.dynamic_complexity.toFixed(1)}`, `Dynamic complexity: ${track.dynamic_complexity.toFixed(1)} — average variation in loudness; higher = more dramatic shifts between quiet and loud.`)}
+                audioChip(`Dyn ${track.dynamic_complexity.toFixed(1)}`, `Dynamic complexity: ${track.dynamic_complexity.toFixed(1)}. Average variation in loudness; higher = more dramatic shifts between quiet and loud.`)}
             </div>
             {info && <p className="text-xs text-gray-400 mt-1 leading-snug">{info}</p>}
           </div>
         )}
 
-        {/* "N more versions" — same song, other recordings (live, remaster, alt album…) */}
+        {/* "N more versions" - same song, other recordings (live, remaster, alt album…) */}
         {canExpand && (
           <div className="mt-1.5">
             <button
@@ -207,7 +207,7 @@ export default function TrackCard({ track, exactDuration, tolerance = 0 }: Track
         )}
       </div>
 
-      {/* Popularity dot — only shown once enriched */}
+      {/* Popularity dot - only shown once enriched */}
       {track.popularity != null && track.popularity > 0 && (
         <div
           className="flex-shrink-0 w-1.5 h-1.5 rounded-full bg-blue-200"
