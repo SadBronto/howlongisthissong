@@ -760,32 +760,38 @@ export default {
         const noC    = collabPatterns.map(p => ` AND artist ${p}`).join('');
         const noCfts = collabPatterns.map(p => ` AND t.artist ${p}`).join('');
 
-        // Sort order for artists mode
-        const artistOb     = sort === 'asc' ? 'ORDER BY artist ASC'
+        // Sort order for artists mode. The popularity sort ranks by the sum of each
+        // artist's TOP-20 songs (see the subqueries below), so it reflects a deep bench
+        // of hits rather than raw catalog size. The subquery flattens to `artist`, so the
+        // outer ORDER BY never needs a `t.` prefix.
+        const artistOrder = sort === 'asc' ? 'ORDER BY artist ASC'
           : sort === 'desc' ? 'ORDER BY artist DESC'
           : 'ORDER BY total_pop DESC, artist ASC';
-        const artistObFts  = sort === 'asc' ? 'ORDER BY t.artist ASC'
-          : sort === 'desc' ? 'ORDER BY t.artist DESC'
-          : 'ORDER BY total_pop DESC, t.artist ASC';
+        const ARTIST_TOP_N = 20;   // sum this many of each artist's most-popular songs
 
         let dataStmt:  D1PreparedStatement;
         let countStmt: D1PreparedStatement;
 
         if (hasArtistFts) {
           // FTS column-specific search (artist keyword + folded advanced text):
-          // avoids a full-table GROUP BY scan. Ordered by total track popularity
-          // (sum across the artist's catalog), so deep-catalog acts beat one-hit credits.
+          // avoids a full-table GROUP BY scan. Ranked by the sum of each artist's
+          // top-20 songs, so a deep bench of hits beats both one-hit credits and
+          // prolific-but-modest catalogs.
           const ftsArtistTerm = artistFtsTerm;
           const dur    = hasDuration ? buildDurationClause('t', minDuration, maxDuration) : null;
           const durSql = dur ? ` AND ${dur.sql}` : '';
 
           dataStmt = env.DB.prepare(`
-            SELECT t.artist, SUM(COALESCE(t.popularity, 0)) as total_pop
-            FROM tracks_fts JOIN tracks t ON t.id = tracks_fts.rowid
-            WHERE tracks_fts MATCH ?${durSql}
-            AND t.artist IS NOT NULL${noCfts}${fts.sql}${wcArtFts.sql}${swArtist.sql}
-            GROUP BY t.artist
-            ${artistObFts}
+            SELECT artist, SUM(popularity) as total_pop FROM (
+              SELECT t.artist AS artist, COALESCE(t.popularity, 0) AS popularity,
+                     ROW_NUMBER() OVER (PARTITION BY t.artist ORDER BY COALESCE(t.popularity, 0) DESC) AS rn
+              FROM tracks_fts JOIN tracks t ON t.id = tracks_fts.rowid
+              WHERE tracks_fts MATCH ?${durSql}
+              AND t.artist IS NOT NULL${noCfts}${fts.sql}${wcArtFts.sql}${swArtist.sql}
+            )
+            WHERE rn <= ${ARTIST_TOP_N}
+            GROUP BY artist
+            ${artistOrder}
             LIMIT ${perPage + 1} OFFSET ${offset}
           `).bind(ftsArtistTerm, ...(dur?.params ?? []), ...fts.params, ...wcArtFts.params, ...swArtist.params);
 
@@ -801,9 +807,15 @@ export default {
         } else if (hasDuration) {
           const dur = buildDurationClause('', minDuration, maxDuration);
           dataStmt = env.DB.prepare(`
-            SELECT artist, SUM(COALESCE(popularity, 0)) as total_pop FROM tracks
-            WHERE ${dur.sql} AND artist IS NOT NULL${noC}${dir.sql}${wcArtDir.sql}
-            GROUP BY artist ${artistOb}
+            SELECT artist, SUM(popularity) as total_pop FROM (
+              SELECT artist, COALESCE(popularity, 0) AS popularity,
+                     ROW_NUMBER() OVER (PARTITION BY artist ORDER BY COALESCE(popularity, 0) DESC) AS rn
+              FROM tracks
+              WHERE ${dur.sql} AND artist IS NOT NULL${noC}${dir.sql}${wcArtDir.sql}
+            )
+            WHERE rn <= ${ARTIST_TOP_N}
+            GROUP BY artist
+            ${artistOrder}
             LIMIT ${perPage + 1} OFFSET ${offset}
           `).bind(...dur.params, ...dir.params, ...wcArtDir.params);
           countStmt = env.DB.prepare(`
@@ -815,9 +827,15 @@ export default {
 
         } else {
           dataStmt = env.DB.prepare(`
-            SELECT artist, SUM(COALESCE(popularity, 0)) as total_pop FROM tracks
-            WHERE artist IS NOT NULL${noC}${dir.sql}${wcArtDir.sql}
-            GROUP BY artist ${artistOb}
+            SELECT artist, SUM(popularity) as total_pop FROM (
+              SELECT artist, COALESCE(popularity, 0) AS popularity,
+                     ROW_NUMBER() OVER (PARTITION BY artist ORDER BY COALESCE(popularity, 0) DESC) AS rn
+              FROM tracks
+              WHERE artist IS NOT NULL${noC}${dir.sql}${wcArtDir.sql}
+            )
+            WHERE rn <= ${ARTIST_TOP_N}
+            GROUP BY artist
+            ${artistOrder}
             LIMIT ${perPage + 1} OFFSET ${offset}
           `).bind(...dir.params, ...wcArtDir.params);
           countStmt = env.DB.prepare(`
