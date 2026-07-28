@@ -763,23 +763,24 @@ export default {
         // Sort order for artists mode
         const artistOb     = sort === 'asc' ? 'ORDER BY artist ASC'
           : sort === 'desc' ? 'ORDER BY artist DESC'
-          : 'ORDER BY max_pop DESC, artist ASC';
+          : 'ORDER BY total_pop DESC, artist ASC';
         const artistObFts  = sort === 'asc' ? 'ORDER BY t.artist ASC'
           : sort === 'desc' ? 'ORDER BY t.artist DESC'
-          : 'ORDER BY max_pop DESC, t.artist ASC';
+          : 'ORDER BY total_pop DESC, t.artist ASC';
 
         let dataStmt:  D1PreparedStatement;
         let countStmt: D1PreparedStatement;
 
         if (hasArtistFts) {
           // FTS column-specific search (artist keyword + folded advanced text):
-          // avoids a full-table GROUP BY scan. Ordered by peak track popularity.
+          // avoids a full-table GROUP BY scan. Ordered by total track popularity
+          // (sum across the artist's catalog), so deep-catalog acts beat one-hit credits.
           const ftsArtistTerm = artistFtsTerm;
           const dur    = hasDuration ? buildDurationClause('t', minDuration, maxDuration) : null;
           const durSql = dur ? ` AND ${dur.sql}` : '';
 
           dataStmt = env.DB.prepare(`
-            SELECT t.artist, MAX(COALESCE(t.popularity, 0)) as max_pop
+            SELECT t.artist, SUM(COALESCE(t.popularity, 0)) as total_pop
             FROM tracks_fts JOIN tracks t ON t.id = tracks_fts.rowid
             WHERE tracks_fts MATCH ?${durSql}
             AND t.artist IS NOT NULL${noCfts}${fts.sql}${wcArtFts.sql}${swArtist.sql}
@@ -800,7 +801,7 @@ export default {
         } else if (hasDuration) {
           const dur = buildDurationClause('', minDuration, maxDuration);
           dataStmt = env.DB.prepare(`
-            SELECT artist, MAX(COALESCE(popularity, 0)) as max_pop FROM tracks
+            SELECT artist, SUM(COALESCE(popularity, 0)) as total_pop FROM tracks
             WHERE ${dur.sql} AND artist IS NOT NULL${noC}${dir.sql}${wcArtDir.sql}
             GROUP BY artist ${artistOb}
             LIMIT ${perPage + 1} OFFSET ${offset}
@@ -814,7 +815,7 @@ export default {
 
         } else {
           dataStmt = env.DB.prepare(`
-            SELECT artist, MAX(COALESCE(popularity, 0)) as max_pop FROM tracks
+            SELECT artist, SUM(COALESCE(popularity, 0)) as total_pop FROM tracks
             WHERE artist IS NOT NULL${noC}${dir.sql}${wcArtDir.sql}
             GROUP BY artist ${artistOb}
             LIMIT ${perPage + 1} OFFSET ${offset}
