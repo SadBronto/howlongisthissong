@@ -420,7 +420,8 @@ export default function SearchPage() {
       const sv = searchParams.get('sort') ?? 'relevance';
       return ['relevance', 'asc', 'desc'].includes(sv) ? sv : 'relevance';
     })();
-    if (q || activeCount(f) > 0) doSearch(q, 0, f, pg, pp, s);
+    const am = searchParams.get('mode') === 'artists';
+    if (q || activeCount(f) > 0) doSearch(q, 0, f, pg, pp, s, am);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
