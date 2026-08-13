@@ -26,7 +26,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS tracks_fts USING fts5(
   album,
   content='tracks',
   content_rowid='id',
-  tokenize='porter ascii'
+  tokenize='porter unicode61 remove_diacritics 2'
 );
 
 -- Keep FTS in sync on insert

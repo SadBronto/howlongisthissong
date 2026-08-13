@@ -43,12 +43,12 @@ async function main() {
   console.log('Recreating FTS table…');
   await d1Raw(`CREATE VIRTUAL TABLE tracks_fts USING fts5(
     title, artist, album,
-    tokenize = 'porter ascii'
+    tokenize = 'porter unicode61 remove_diacritics 2'
   )`);
   console.log('  ✓ created');
 
   const FTS_BATCH   = 10_000;
-  const MAX_ID      = 7_743_491;
+  const MAX_ID      = 8_100_000;
   const totalBatches = Math.ceil(MAX_ID / FTS_BATCH);
   const BAR_WIDTH   = 32;
   const startTime   = Date.now();
