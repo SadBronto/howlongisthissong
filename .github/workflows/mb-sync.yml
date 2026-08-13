@@ -1,0 +1,49 @@
+name: MusicBrainz weekly sync
+
+# Adds new songs to the D1 database every week by diffing the latest full
+# MusicBrainz dump against what we already have. Runs in the cloud, so your
+# machine being asleep never matters.
+
+on:
+  schedule:
+    - cron: '0 11 * * 1'   # Mondays 11:00 UTC (~4am US Pacific)
+  workflow_dispatch: {}     # lets you run it manually from the Actions tab
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Download latest MusicBrainz dump (recording, artist_credit, isrc)
+        run: |
+          set -euo pipefail
+          LATEST=$(curl -sf https://data.metabrainz.org/pub/musicbrainz/data/fullexport/LATEST | tr -d '\r\n')
+          echo "Latest dump: $LATEST"
+          BASE="https://data.metabrainz.org/pub/musicbrainz/data/fullexport/$LATEST"
+          mkdir -p mbdump-dl
+          echo "Downloading core dump (~7GB)..."
+          curl -sf -A "HowLongIsThisSong/1.0 (howlongisthissong.com)" -o mbdump-dl/core.tar.bz2 "$BASE/mbdump.tar.bz2"
+          echo "Extracting the 3 files we need..."
+          tar -xjf mbdump-dl/core.tar.bz2 -C mbdump-dl mbdump/recording mbdump/artist_credit mbdump/isrc
+          rm -f mbdump-dl/core.tar.bz2     # free ~7GB before the import
+          ls -lh mbdump-dl/mbdump/
+
+      - name: Import new songs into D1
+        env:
+          CLOUDFLARE_ACCOUNT_ID:     ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN:      ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_D1_DATABASE_ID: ${{ secrets.CLOUDFLARE_D1_DATABASE_ID }}
+          MBDUMP_PATH: mbdump-dl/mbdump
+          NODE_OPTIONS: --max-old-space-size=12288
+        run: npx tsx scripts/import-d1-delta.ts --live
