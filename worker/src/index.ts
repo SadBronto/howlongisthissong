@@ -269,6 +269,40 @@ function groupedFtsQuery(whereClause: string): string {
   `;
 }
 
+// Direct-table version_count order-by: same shape as buildGroupedOrderBy, but the direct
+// path has no bm25 (_bm) to tiebreak on, so relevance falls back to score alone.
+function buildGroupedOrderByDirect(sort: string): string {
+  if (sort === 'asc')  return `ORDER BY duration_ms ASC`;
+  if (sort === 'desc') return `ORDER BY duration_ms DESC`;
+  return `ORDER BY ${GROUP_SCORE} DESC, duration_ms`;
+}
+
+/** Same idea as groupedFtsQuery, for queries that run against the plain `tracks` table
+ *  instead of tracks_fts (currently just wildcard searches, leading/trailing '*', which
+ *  can't ride the FTS index at all). No bm25 relevance score is available here, so the
+ *  pre-window cap uses the same popularity/search_count score the direct path already
+ *  sorts by (see buildOrderBy). Confirmed on production data that this adds negligible
+ *  cost on top of the LIKE scan itself (2026-08-31: 2.0-2.2s grouped vs 2.6-2.7s
+ *  ungrouped, warm cache, same ~6.09M rows read either way: the scan dominates, not
+ *  the windowing). */
+function groupedDirectQuery(whereClause: string): string {
+  const innerScore = `CASE WHEN popularity > 0 THEN popularity ELSE MIN(CAST(search_count * 10 AS INTEGER), 30) END`;
+  return `
+    SELECT * FROM (
+      SELECT *,
+        ROW_NUMBER() OVER (PARTITION BY lower(title), lower(artist) ORDER BY ${HEADLINE_RANK_GROUPED}) AS _rn,
+        COUNT(*) OVER (PARTITION BY lower(title), lower(artist)) AS version_count
+      FROM (
+        SELECT ${DIRECT_COLS}
+        FROM tracks
+        WHERE ${whereClause}
+        ORDER BY ${innerScore} DESC
+        LIMIT 4000
+      )
+    ) WHERE _rn = 1
+  `;
+}
+
 /** Build an FTS term that narrows to the candidate rows for ONE song before the exact
  *  lower(title)=? AND lower(artist)=? equality filter runs. AND-ing the title and artist
  *  word tokens keeps the candidate set tiny (a few rows) so the equality filter never
@@ -945,28 +979,31 @@ export default {
 
       } else if (hasDuration) {
         const dur = buildDurationClause('', minDuration, maxDuration);
-        dataStmt = env.DB.prepare(`
-          SELECT ${DIRECT_COLS} FROM tracks
-          WHERE ${dur.sql}${dir.sql}${wcDir.sql}
-          ${ob} LIMIT ${perPage + 1} OFFSET ${offset}
-        `).bind(...dur.params, ...dir.params, ...wcDir.params);
-        countStmt = env.DB.prepare(`
-          SELECT COUNT(*) as n FROM (
-            SELECT 1 FROM tracks WHERE ${dur.sql}${dir.sql}${wcDir.sql} LIMIT 10001
-          )
-        `).bind(...dur.params, ...dir.params, ...wcDir.params);
+        const wh  = `${dur.sql}${dir.sql}${wcDir.sql}`;
+        const ps  = [...dur.params, ...dir.params, ...wcDir.params];
+        // Grouping (dedup same-song versions) is only wired up for wildcard searches here,
+        // matching the reported gap: FTS keyword searches already group above, but wildcard
+        // searches bypass FTS entirely (no index can do a leading/trailing '*' scan) and
+        // landed on this plain-table path, which never grouped. Not extended to plain
+        // duration/filter-only searches (no wildcard): out of scope for this fix.
+        if (grouped && hasWc) {
+          dataStmt  = env.DB.prepare(`${groupedDirectQuery(wh)} ${buildGroupedOrderByDirect(sort)} LIMIT ${perPage + 1} OFFSET ${offset}`).bind(...ps);
+          countStmt = env.DB.prepare(`SELECT COUNT(*) as n FROM (SELECT 1 FROM tracks WHERE ${wh} GROUP BY lower(title), lower(artist) LIMIT 10001)`).bind(...ps);
+        } else {
+          dataStmt  = env.DB.prepare(`SELECT ${DIRECT_COLS} FROM tracks WHERE ${wh} ${ob} LIMIT ${perPage + 1} OFFSET ${offset}`).bind(...ps);
+          countStmt = env.DB.prepare(`SELECT COUNT(*) as n FROM (SELECT 1 FROM tracks WHERE ${wh} LIMIT 10001)`).bind(...ps);
+        }
 
       } else {
-        dataStmt = env.DB.prepare(`
-          SELECT ${DIRECT_COLS} FROM tracks
-          WHERE 1=1${dir.sql}${wcDir.sql}
-          ${ob} LIMIT ${perPage + 1} OFFSET ${offset}
-        `).bind(...dir.params, ...wcDir.params);
-        countStmt = env.DB.prepare(`
-          SELECT COUNT(*) as n FROM (
-            SELECT 1 FROM tracks WHERE 1=1${dir.sql}${wcDir.sql} LIMIT 10001
-          )
-        `).bind(...dir.params, ...wcDir.params);
+        const wh = `1=1${dir.sql}${wcDir.sql}`;
+        const ps = [...dir.params, ...wcDir.params];
+        if (grouped && hasWc) {
+          dataStmt  = env.DB.prepare(`${groupedDirectQuery(wh)} ${buildGroupedOrderByDirect(sort)} LIMIT ${perPage + 1} OFFSET ${offset}`).bind(...ps);
+          countStmt = env.DB.prepare(`SELECT COUNT(*) as n FROM (SELECT 1 FROM tracks WHERE ${wh} GROUP BY lower(title), lower(artist) LIMIT 10001)`).bind(...ps);
+        } else {
+          dataStmt  = env.DB.prepare(`SELECT ${DIRECT_COLS} FROM tracks WHERE ${wh} ${ob} LIMIT ${perPage + 1} OFFSET ${offset}`).bind(...ps);
+          countStmt = env.DB.prepare(`SELECT COUNT(*) as n FROM (SELECT 1 FROM tracks WHERE ${wh} LIMIT 10001)`).bind(...ps);
+        }
       }
 
       const [result, countResult] = await Promise.all([
