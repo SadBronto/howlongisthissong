@@ -147,6 +147,40 @@ function columnFtsTerm(col: 'title' | 'artist', value: string): string {
   return tokens.map(t => `${col}:${t}*`).join(' ');
 }
 
+/** Same word-splitting `columnFtsTerm` uses, exposed standalone for the stemming check below. */
+function wordTokens(value: string): string[] {
+  return value.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
+}
+
+/** Strip accents so the literal check lines up with the FTS tokenizer's own
+ *  `remove_diacritics` behavior (an accented literal match should never read as "stemmed"). */
+function foldAccents(s: string): string {
+  return s.normalize('NFD').replace(/[̀-ͯ]/g, '');
+}
+
+/** tracks_fts uses the `porter` tokenizer, which stems words to a shared root before
+ *  matching ("missing" -> "miss", so it also matches "Miss Jackson", "Mission", etc.,
+ *  see the search-stemming-missing-bug memory). We don't fight the tokenizer; we detect
+ *  its effect empirically, on the actual rows we're about to show. For a given searched
+ *  word, if ANY returned row's relevant text does NOT contain that word literally, the
+ *  row could only have matched via a shared stem, proof stemming fired on this search.
+ *  A hit here is guaranteed real (it's a direct substring check on real result rows);
+ *  the only failure mode is a false NEGATIVE if every stemmed hit lands on a later page,
+ *  never a false alarm on the page the user is looking at. */
+function findStemmedWord<T>(rows: T[], checks: { tokens: string[]; text: (row: T) => string }[]): string | null {
+  for (const { tokens, text } of checks) {
+    for (const token of tokens) {
+      if (token.length < 3) continue; // porter barely touches 1-2 letter words; skip to avoid noise
+      const needle = foldAccents(token); // token is already lowercased by wordTokens()
+      for (const row of rows) {
+        const haystack = foldAccents(text(row).toLowerCase());
+        if (!haystack.includes(needle)) return token; // this row only matched via the stem
+      }
+    }
+  }
+  return null;
+}
+
 function buildFilterClauses(f: Filters, alias: string): { sql: string; params: unknown[] } {
   const p     = alias ? `${alias}.` : '';
   const conds: string[]  = [];
@@ -858,7 +892,19 @@ export default {
         const totalCapped = rawCount > 10000;
         const total       = Math.min(rawCount, 10000);
 
-        return cacheJson({ artists, total, totalCapped, page, perPage, hasMore, mode: 'artists' });
+        // Same empirical stemming check as the tracks path (see search-stemming-missing-bug
+        // memory): only meaningful when the artist name itself was matched through FTS.
+        let stemmedWord: string | null = null;
+        if (hasArtistFts && artists.length > 0) {
+          const tokens = [
+            ...(artistKeyword ? wordTokens(artistKeyword)  : []),
+            ...(artistFold    ? wordTokens(artistContains ?? '') : []),
+            ...(titleFold     ? wordTokens(titleContains  ?? '') : []),
+          ];
+          stemmedWord = findStemmedWord(artists, [{ tokens, text: a => a }]);
+        }
+
+        return cacheJson({ artists, total, totalCapped, page, perPage, hasMore, mode: 'artists', stemmedWord: stemmedWord ?? undefined });
       } catch (err) {
         console.error('Artists search error:', err);
         return json({ error: 'Search failed' }, 500);
@@ -973,6 +1019,32 @@ export default {
       // Genre enrichment intentionally NOT done here — it runs in the cron to avoid
       // tripping MusicBrainz's rate limit when many people search at once.
 
+      // ── Empirical stemming detection (see search-stemming-missing-bug memory) ──
+      // Only meaningful when this query actually hit tracks_fts (hasKeywords): a
+      // duration-only or filter-only query runs against the plain `tracks` table and
+      // never goes through the porter tokenizer, so it can't have been stemmed.
+      let stemmedWord: string | null = null;
+      if (hasKeywords && tracks.length > 0) {
+        const checks: { tokens: string[]; text: (t: TrackRow) => string }[] = [];
+        if (parsed.keywords) {
+          // tracks_fts indexes title, artist, AND album, unscoped (no column prefix) here,
+          // so a legit match can land purely on the album (a "Love Songs" compilation) with
+          // neither title nor artist containing the word. Check album too or that reads as
+          // a false "stemmed" positive.
+          checks.push({
+            tokens: wordTokens(parsed.keywords),
+            text: t => `${String(t.title ?? '')} ${String(t.artist ?? '')} ${String(t.album ?? '')}`,
+          });
+        }
+        if (titleFold && titleContains) {
+          checks.push({ tokens: wordTokens(titleContains), text: t => String(t.title ?? '') });
+        }
+        if (artistFold && artistContains) {
+          checks.push({ tokens: wordTokens(artistContains), text: t => String(t.artist ?? '') });
+        }
+        stemmedWord = findStemmedWord(tracks, checks);
+      }
+
       return cacheJson({
         tracks,
         total,
@@ -980,6 +1052,7 @@ export default {
         page,
         perPage,
         hasMore,
+        stemmedWord: stemmedWord ?? undefined,
         parsed: {
           keywords:      parsed.keywords,
           exactDuration: parsed.exactDuration,

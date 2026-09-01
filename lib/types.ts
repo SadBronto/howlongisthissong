@@ -40,6 +40,11 @@ export interface SearchResult {
   page:         number;
   perPage:      number;
   hasMore:      boolean;
+  // Set when the search engine's word-stemming pulled in a result that doesn't literally
+  // contain this word (e.g. "missing" matching "Miss Jackson" via a shared root). Detected
+  // empirically against the actual result rows on the current page, see worker's
+  // findStemmedWord(). Absent when stemming didn't affect this page of results.
+  stemmedWord?: string;
   parsed?: {
     keywords?: string;
     exactDuration?: number;

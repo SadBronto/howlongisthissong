@@ -976,6 +976,26 @@ export default function SearchPage() {
           </p>
         )}
 
+        {!loading && !error && results?.stemmedWord && (
+          <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+            <p className="font-medium">Some of these aren&rsquo;t exact matches.</p>
+            <p className="mt-1.5 leading-relaxed">
+              We&rsquo;re working with a limited budget, and one of the tradeoffs is{' '}
+              <span className="font-semibold">stemming</span>: our search engine treats closely
+              related words (like &ldquo;running&rdquo; and &ldquo;run&rdquo;) as the same word so
+              it can find more of what you&rsquo;re after. That&rsquo;s happening right now: the word{' '}
+              <code className="font-mono bg-amber-100 px-1 rounded">{results.stemmedWord}</code>{' '}
+              in your search is being matched by its root, not the exact word, so some results
+              won&rsquo;t actually contain it.
+            </p>
+            <p className="mt-1.5 leading-relaxed">
+              Need it to match exactly? Try searching{' '}
+              <code className="font-mono bg-amber-100 px-1 rounded">*{results.stemmedWord}*</code>{' '}
+              instead.
+            </p>
+          </div>
+        )}
+
         {hasResults && !error && results?.mode === 'artists' && (
           <div className="mt-4">
             <div className="flex items-center justify-between mb-3">
