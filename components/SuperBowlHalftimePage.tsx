@@ -97,9 +97,20 @@ export default function SuperBowlHalftimePage() {
 
         <div className="mt-8 pt-5 border-t border-gray-100 text-sm text-gray-500 leading-relaxed">
           The archive is a curated list of halftime performances. Some early shows and
-          ensemble segments do not have a documented song list.
+          ensemble segments do not have a documented song list. Shortened songs, snippets,
+          medleys, and instrumental or taped material are labeled where the source list identifies them.
           <span className="mx-2">·</span>
           <Link href="/" className="text-blue-600 hover:underline">Search the full song database</Link>
+        </div>
+
+        <div className="mt-5 text-xs text-gray-400 leading-relaxed">
+          Cross-checked against the{' '}
+          <a href="https://www.nfl.info/nflmedia/Postseason/2005%20Postseason/Postseason%20Media/SuperBowl.pdf" target="_blank" rel="noopener noreferrer" className="underline hover:text-gray-600">NFL&rsquo;s historical record</a>,{' '}
+          <a href="https://en.wikipedia.org/wiki/List_of_Super_Bowl_halftime_shows" target="_blank" rel="noopener noreferrer" className="underline hover:text-gray-600">the compiled show list</a>, and independent performance/setlist coverage from{' '}
+          <a href="https://time.com/6693288/usher-super-bowl-halftime-show-2024-highlights/" target="_blank" rel="noopener noreferrer" className="underline hover:text-gray-600">TIME</a>,{' '}
+          <a href="https://apnews.com/article/2b52ec750c4822efa4c6b2dedd5fc7d7" target="_blank" rel="noopener noreferrer" className="underline hover:text-gray-600">AP</a>,{' '}
+          <a href="https://www.cbssports.com/nfl/news/super-bowl-2026-halftime-show-bad-bunny-setlist-guests-best-moments/" target="_blank" rel="noopener noreferrer" className="underline hover:text-gray-600">CBS Sports</a>, and{' '}
+          <a href="https://www.setlist.fm/setlist/bad-bunny/2026/levis-stadium-santa-clara-ca-73412ec9.html" target="_blank" rel="noopener noreferrer" className="underline hover:text-gray-600">Setlist.fm</a>.
         </div>
       </div>
     </main>
