@@ -33,14 +33,13 @@ export default function SuperBowlHalftimePage() {
         </Link>
 
         <div className="mt-5 max-w-3xl">
-          <p className="text-xs font-semibold uppercase tracking-wider text-blue-600">The halftime archive</p>
+          <p className="text-xs font-semibold uppercase tracking-wider text-blue-600">Curated search</p>
           <h1 className="text-3xl sm:text-4xl font-bold tracking-tight text-gray-900 mt-2">
             Super Bowl halftime songs
           </h1>
           <p className="text-gray-600 mt-3 leading-relaxed">
-            A year-by-year list of songs performed during the Super Bowl halftime show,
-            from 1967 through 2026. Search the archive by song or performer, then jump
-            straight to HowLongIsThisSong&rsquo;s track search.
+            Search 418 curated song entries from Super Bowl halftime shows, 1967&ndash;2026.
+            Each result keeps the useful context: who performed it, and when.
           </p>
         </div>
 
@@ -58,33 +57,39 @@ export default function SuperBowlHalftimePage() {
           </div>
         </div>
 
-        <div className="mt-8 border-t border-gray-200">
+        <div className="mt-6 border-t border-gray-200">
           {years.length === 0 ? (
             <p className="py-10 text-center text-sm text-gray-500">No halftime songs match that search.</p>
           ) : years.map(([year, songs]) => (
             <section key={year} className="border-b border-gray-100 py-6">
-              <div className="flex items-baseline justify-between gap-3 mb-3">
-                <h2 className="text-xl font-semibold text-gray-900">{year}</h2>
-                <span className="text-xs text-gray-400">Super Bowl {songs[0].bowl} · {songs.length} songs</span>
+              <div className="flex items-baseline justify-between gap-3 mb-1 px-3">
+                <h2 className="text-lg font-semibold text-gray-900">{year}</h2>
+                <span className="text-xs text-gray-400">Super Bowl {songs[0].bowl} &middot; {songs.length} songs</span>
               </div>
-              <div className="divide-y divide-gray-100">
+              <div>
                 {songs.map((song, index) => {
                   const undocumented = song.song === 'NOT DOCUMENTED';
                   return (
-                    <div key={`${song.year}-${song.song}-${song.performer}-${index}`} className="py-3 grid grid-cols-1 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] gap-1 sm:gap-4 sm:items-center">
-                      <div className="font-medium text-gray-900">
+                    <div key={`${song.year}-${song.song}-${song.performer}-${index}`} className="group flex items-center gap-3 sm:gap-4 py-3 px-3 rounded-lg hover:bg-gray-50 transition-colors">
+                      <div className="w-20 sm:w-24 flex-shrink-0 text-right font-mono text-xs sm:text-sm text-gray-400 tabular-nums">
+                        {song.bowl}
+                      </div>
+                      <div className="w-px h-10 bg-gray-200 flex-shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <div className="font-medium text-gray-900 leading-snug">
                         {undocumented ? (
                           <span className="text-gray-400 italic">Song not documented</span>
                         ) : (
-                          <Link href={`/?q=${encodeURIComponent(song.song)}`} className="hover:text-blue-600 hover:underline">
+                          <Link href={`/?q=${encodeURIComponent(song.song)}`} className="hover:text-blue-600">
                             {song.song}
                           </Link>
                         )}
+                        </div>
+                        <div className="text-sm text-gray-600 mt-0.5 truncate">{song.performer}</div>
                       </div>
-                      <div className="text-sm text-gray-600">{song.performer}</div>
                       {!undocumented && (
-                        <Link href={`/?q=${encodeURIComponent(song.song)}`} className="text-xs text-blue-600 hover:underline sm:text-right">
-                          Search song &rarr;
+                        <Link href={`/?q=${encodeURIComponent(song.song)}`} aria-label={`Search for ${song.song}`} title="Search this song" className="flex-shrink-0 text-gray-300 group-hover:text-blue-500 text-lg leading-none">
+                          &rarr;
                         </Link>
                       )}
                     </div>
