@@ -405,7 +405,7 @@ export const SUPER_BOWL_HALFTIME_SONGS: HalftimeSong[] = [
   { year: 2024, bowl: 'LVIII', performer: 'Usher; Lil Jon', song: 'Turn Down for What' },
   { year: 2024, bowl: 'LVIII', performer: 'Usher; Lil Jon; Ludacris', song: 'Yeah!' },
   { year: 2025, bowl: 'LIX', performer: 'Kendrick Lamar', song: 'Wacced Out Murals, intro' },
-  { year: 2025, bowl: 'LIX', performer: 'Kendrick Lamar', song: 'Bodies' },
+  { year: 2025, bowl: 'LIX', performer: 'Kendrick Lamar', song: 'Bodies, tease' },
   { year: 2025, bowl: 'LIX', performer: 'Kendrick Lamar', song: 'Squabble Up' },
   { year: 2025, bowl: 'LIX', performer: 'Kendrick Lamar', song: 'HUMBLE.' },
   { year: 2025, bowl: 'LIX', performer: 'Kendrick Lamar', song: 'DNA.' },
