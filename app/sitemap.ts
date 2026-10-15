@@ -17,6 +17,12 @@ export default function sitemap(): MetadataRoute.Sitemap {
       priority: 0.5,
     },
     {
+      url: 'https://howlongisthissong.com/super-bowl-halftime',
+      lastModified: new Date(),
+      changeFrequency: 'monthly',
+      priority: 0.7,
+    },
+    {
       url: 'https://howlongisthissong.com/privacy',
       lastModified: new Date(),
       changeFrequency: 'yearly',
